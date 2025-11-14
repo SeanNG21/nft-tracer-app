@@ -690,11 +690,9 @@ function App() {
         )}
         </div>
 
-        <footer className="footer">
-          <p>Kernel Packet Tracer v2.0 | eBPF + BTF Discovery + Realtime</p>
-          <p>Full Mode, NFT Mode & Universal Mode | Built with BCC & React</p>
-        </footer>
+        
       )}
+       
     </div>
   );
 }
