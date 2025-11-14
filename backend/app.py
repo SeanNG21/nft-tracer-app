@@ -1158,6 +1158,242 @@ def get_modes():
     })
 
 # ============================================================================
+# TRACE ANALYZER API - Phân tích chi tiết file trace
+# ============================================================================
+class TraceAnalyzer:
+    """Helper class để load và phân tích trace files"""
+
+    @staticmethod
+    def load_trace_file(filename: str) -> Optional[Dict]:
+        """Load trace JSON file"""
+        file_path = os.path.join(OUTPUT_DIR, filename)
+        if not os.path.exists(file_path):
+            return None
+
+        try:
+            with open(file_path, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading trace file {filename}: {e}")
+            return None
+
+    @staticmethod
+    def filter_packets(traces: List[Dict], filters: Dict) -> List[Dict]:
+        """Filter packets based on query parameters"""
+        filtered = traces
+
+        # Filter by IP addresses
+        if 'src_ip' in filters and filters['src_ip']:
+            filtered = [t for t in filtered if t.get('src_ip') == filters['src_ip']]
+        if 'dst_ip' in filters and filters['dst_ip']:
+            filtered = [t for t in filtered if t.get('dst_ip') == filters['dst_ip']]
+
+        # Filter by ports
+        if 'src_port' in filters and filters['src_port']:
+            try:
+                port = int(filters['src_port'])
+                filtered = [t for t in filtered if t.get('src_port') == port]
+            except ValueError:
+                pass
+        if 'dst_port' in filters and filters['dst_port']:
+            try:
+                port = int(filters['dst_port'])
+                filtered = [t for t in filtered if t.get('dst_port') == port]
+            except ValueError:
+                pass
+
+        # Filter by protocol
+        if 'protocol' in filters and filters['protocol']:
+            proto = filters['protocol'].upper()
+            filtered = [t for t in filtered if t.get('protocol_name') == proto]
+
+        # Filter by skb address
+        if 'skb' in filters and filters['skb']:
+            filtered = [t for t in filtered if filters['skb'].lower() in str(t.get('skb_addr', '')).lower()]
+
+        # Filter by hook
+        if 'hook' in filters and filters['hook']:
+            hook = filters['hook'].upper()
+            filtered = [t for t in filtered if t.get('hook_name') == hook]
+
+        # Filter by verdict
+        if 'verdict' in filters and filters['verdict']:
+            verdict = filters['verdict'].upper()
+            filtered = [t for t in filtered if t.get('final_verdict') == verdict]
+
+        # Filter by function name
+        if 'function' in filters and filters['function']:
+            func = filters['function'].lower()
+            filtered = [t for t in filtered
+                       if any(func in f.lower() for f in t.get('functions_path', []))]
+
+        # Keyword search across all fields
+        if 'keyword' in filters and filters['keyword']:
+            keyword = filters['keyword'].lower()
+            filtered = [t for t in filtered
+                       if keyword in json.dumps(t).lower()]
+
+        return filtered
+
+    @staticmethod
+    def get_packet_detail(trace_data: Dict, packet_index: int) -> Optional[Dict]:
+        """Get full detail of a specific packet including all events"""
+        traces = trace_data.get('traces', [])
+        if packet_index < 0 or packet_index >= len(traces):
+            return None
+
+        packet = traces[packet_index]
+
+        # Load full events from storage if needed
+        # For now, important_events are already in the summary
+        # If you need ALL events, you would need to store them separately
+
+        # Analyze packet flow and verdict chain
+        analysis = TraceAnalyzer._analyze_packet_flow(packet)
+
+        return {
+            **packet,
+            'packet_index': packet_index,
+            'analysis': analysis
+        }
+
+    @staticmethod
+    def _analyze_packet_flow(packet: Dict) -> Dict:
+        """Analyze packet flow and provide insights"""
+        analysis = {
+            'verdict_chain': [],
+            'jump_goto_chain': [],
+            'drop_reason': None,
+            'flow_summary': []
+        }
+
+        # Analyze verdict changes
+        events = packet.get('important_events', [])
+        for event in events:
+            trace_type = event.get('trace_type')
+
+            if trace_type in ['chain_exit', 'hook_exit']:
+                verdict_info = {
+                    'timestamp': event.get('timestamp'),
+                    'type': trace_type,
+                    'verdict': event.get('verdict_str'),
+                    'hook': event.get('hook_name'),
+                    'chain': event.get('chain_name'),
+                    'table': event.get('table_name')
+                }
+                analysis['verdict_chain'].append(verdict_info)
+
+                # Check for JUMP/GOTO
+                if event.get('verdict_str') in ['JUMP', 'GOTO']:
+                    analysis['jump_goto_chain'].append({
+                        'source_chain': event.get('chain_name'),
+                        'target_chain': event.get('target_chain'),
+                        'verdict_type': event.get('verdict_str')
+                    })
+
+            elif trace_type == 'rule_eval':
+                # Track rule evaluation
+                pass
+
+        # Determine drop reason
+        final_verdict = packet.get('final_verdict')
+        if final_verdict == 'DROP':
+            last_verdict = analysis['verdict_chain'][-1] if analysis['verdict_chain'] else None
+            if last_verdict:
+                analysis['drop_reason'] = {
+                    'hook': last_verdict.get('hook'),
+                    'chain': last_verdict.get('chain'),
+                    'table': last_verdict.get('table'),
+                    'reason': f"Packet dropped at {last_verdict.get('hook')} in chain {last_verdict.get('chain')}"
+                }
+
+        # Create flow summary
+        functions = packet.get('functions_path', [])
+        if functions:
+            # Group functions by layer
+            layers = {
+                'Network Device': ['netif_receive_skb', '__netif_receive_skb_core'],
+                'IP Layer': ['ip_rcv', 'ip_rcv_finish', 'ip_local_deliver', 'ip_forward', 'ip_output'],
+                'Transport': ['tcp_v4_rcv', 'udp_rcv'],
+                'Netfilter': ['nf_hook_slow', 'nf_conntrack_in'],
+            }
+
+            for layer, layer_funcs in layers.items():
+                matched = [f for f in functions if any(lf in f for lf in layer_funcs)]
+                if matched:
+                    analysis['flow_summary'].append({
+                        'layer': layer,
+                        'functions': matched
+                    })
+
+        return analysis
+
+@app.route('/api/traces/<filename>', methods=['GET'])
+def get_trace_file(filename):
+    """Load complete trace file"""
+    trace_data = TraceAnalyzer.load_trace_file(filename)
+    if trace_data is None:
+        return jsonify({'error': 'Trace file not found'}), 404
+
+    return jsonify(trace_data)
+
+@app.route('/api/traces/<filename>/packets', methods=['GET'])
+def get_trace_packets(filename):
+    """Get filtered list of packets from trace file"""
+    trace_data = TraceAnalyzer.load_trace_file(filename)
+    if trace_data is None:
+        return jsonify({'error': 'Trace file not found'}), 404
+
+    # Get filter parameters from query string
+    filters = {
+        'src_ip': request.args.get('src_ip'),
+        'dst_ip': request.args.get('dst_ip'),
+        'src_port': request.args.get('src_port'),
+        'dst_port': request.args.get('dst_port'),
+        'protocol': request.args.get('protocol'),
+        'skb': request.args.get('skb'),
+        'hook': request.args.get('hook'),
+        'verdict': request.args.get('verdict'),
+        'function': request.args.get('function'),
+        'keyword': request.args.get('keyword')
+    }
+
+    # Remove None values
+    filters = {k: v for k, v in filters.items() if v}
+
+    traces = trace_data.get('traces', [])
+    filtered_traces = TraceAnalyzer.filter_packets(traces, filters)
+
+    # Add pagination support
+    page = int(request.args.get('page', 1))
+    per_page = int(request.args.get('per_page', 100))
+    start = (page - 1) * per_page
+    end = start + per_page
+
+    return jsonify({
+        'session': trace_data.get('session'),
+        'statistics': trace_data.get('statistics'),
+        'filters_applied': filters,
+        'total_packets': len(filtered_traces),
+        'page': page,
+        'per_page': per_page,
+        'packets': filtered_traces[start:end]
+    })
+
+@app.route('/api/traces/<filename>/packets/<int:packet_index>', methods=['GET'])
+def get_packet_detail(filename, packet_index):
+    """Get detailed information about a specific packet"""
+    trace_data = TraceAnalyzer.load_trace_file(filename)
+    if trace_data is None:
+        return jsonify({'error': 'Trace file not found'}), 404
+
+    packet_detail = TraceAnalyzer.get_packet_detail(trace_data, packet_index)
+    if packet_detail is None:
+        return jsonify({'error': 'Packet not found'}), 404
+
+    return jsonify(packet_detail)
+
+# ============================================================================
 # MAIN
 # ============================================================================
 if __name__ == '__main__':
