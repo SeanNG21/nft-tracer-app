@@ -833,9 +833,9 @@ class TraceSession:
                     length=event.length, comm=event.comm.decode('utf-8', errors='ignore')
                 )
                 trace.add_universal_event(universal_event)
-                
-                # === REALTIME: Send function event ===
-                if REALTIME_AVAILABLE and realtime and realtime.is_enabled():
+
+                # === REALTIME: Send function event (ALWAYS for session tracking) ===
+                if REALTIME_AVAILABLE and realtime:
                     try:
                         realtime.process_session_event({
                             'hook': event.hook,
@@ -846,7 +846,8 @@ class TraceSession:
                             'dst_ip': trace._format_ip(event.dst_ip),
                             'timestamp': time.time()
                         }, self.session_id)
-                    except:
+                    except Exception as e:
+                        # Silent fail - don't break session if realtime fails
                         pass
             
             elif event.event_type in [1, 2, 3]:  # NFT events
@@ -865,9 +866,9 @@ class TraceSession:
                     comm=event.comm.decode('utf-8', errors='ignore')
                 )
                 trace.add_nft_event(nft_event)
-                
-                # === REALTIME: Send NFT verdict event ===
-                if REALTIME_AVAILABLE and realtime and realtime.is_enabled():
+
+                # === REALTIME: Send NFT verdict event (ALWAYS for session tracking) ===
+                if REALTIME_AVAILABLE and realtime:
                     try:
                         realtime.process_session_event({
                             'hook': event.hook,
@@ -878,7 +879,8 @@ class TraceSession:
                             'dst_ip': trace._format_ip(event.dst_ip),
                             'timestamp': time.time()
                         }, self.session_id)
-                    except:
+                    except Exception as e:
+                        # Silent fail - don't break session if realtime fails
                         pass
                 
                 if event.event_type == 1 and event.verdict in [0, 1]:
