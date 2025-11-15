@@ -1231,10 +1231,53 @@ class TraceAnalyzer:
 
         try:
             with open(file_path, 'r') as f:
-                return json.load(f)
+                data = json.load(f)
+
+            # Enrich with rule definitions if parser available
+            if NFT_PARSER_AVAILABLE:
+                TraceAnalyzer.enrich_with_rule_definitions(data)
+
+            return data
         except Exception as e:
             print(f"Error loading trace file {filename}: {e}")
             return None
+
+    @staticmethod
+    def enrich_with_rule_definitions(trace_data: Dict):
+        """Enrich events in trace data with NFT rule definitions"""
+        if not NFT_PARSER_AVAILABLE:
+            return
+
+        try:
+            parser = get_ruleset_parser()
+            traces = trace_data.get('traces', [])
+            enriched_count = 0
+
+            for packet in traces:
+                events = packet.get('important_events', [])
+                for event in events:
+                    # Only enrich rule_eval events that don't already have rule_text
+                    if (event.get('trace_type') == 'rule_eval' and
+                        'rule_text' not in event and
+                        event.get('rule_handle', 0) > 0):
+
+                        rule_handle = event['rule_handle']
+                        rule = parser.get_rule_by_handle(rule_handle)
+
+                        if rule:
+                            event['rule_text'] = rule.rule_text
+                            event['rule_table'] = rule.table
+                            event['rule_chain'] = rule.chain
+                            event['rule_family'] = rule.family
+                            enriched_count += 1
+
+            if enriched_count > 0:
+                print(f"[✓] Enriched {enriched_count} events with rule definitions")
+
+        except Exception as e:
+            print(f"[!] Error enriching trace data: {e}")
+            import traceback
+            traceback.print_exc()
 
     @staticmethod
     def filter_packets(traces: List[Dict], filters: Dict) -> List[Dict]:
