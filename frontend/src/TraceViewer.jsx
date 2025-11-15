@@ -22,6 +22,8 @@ const TraceViewer = ({ filename }) => {
     skb: '',
     hook: '',
     verdict: '',
+    any_verdict: '',
+    had_verdict_change: false,
     function: '',
     keyword: ''
   });
@@ -82,6 +84,8 @@ const TraceViewer = ({ filename }) => {
       skb: '',
       hook: '',
       verdict: '',
+      any_verdict: '',
+      had_verdict_change: false,
       function: '',
       keyword: ''
     });
@@ -89,10 +93,28 @@ const TraceViewer = ({ filename }) => {
   };
 
   // Handle packet selection
-  const handlePacketSelect = async (packet, index) => {
+  const handlePacketSelect = async (packet) => {
     try {
+      // Use original_index from packet to get correct data from backend
+      const originalIndex = packet.original_index;
+      if (originalIndex === undefined) {
+        // Fallback: if original_index not available, use packet data directly
+        console.warn('original_index not found, using packet data directly');
+        setSelectedPacket({
+          ...packet,
+          packet_index: -1,
+          analysis: {
+            verdict_chain: [],
+            jump_goto_chain: [],
+            drop_reason: null,
+            flow_summary: []
+          }
+        });
+        return;
+      }
+
       const response = await axios.get(
-        `${API_BASE}/traces/${filename}/packets/${index}`
+        `${API_BASE}/traces/${filename}/packets/${originalIndex}`
       );
       setSelectedPacket(response.data);
     } catch (err) {

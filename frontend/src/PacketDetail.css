@@ -7,6 +7,36 @@
   background-color: #1a1a1a;
 }
 
+/* Placeholder */
+.detail-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 40px;
+  text-align: center;
+  color: #666;
+}
+
+.placeholder-icon {
+  font-size: 64px;
+  margin-bottom: 20px;
+  opacity: 0.5;
+}
+
+.detail-placeholder h3 {
+  margin: 0 0 10px 0;
+  color: #999;
+  font-size: 20px;
+}
+
+.detail-placeholder p {
+  margin: 0;
+  color: #666;
+  font-size: 14px;
+}
+
 /* Tabs */
 .detail-tabs {
   display: flex;
@@ -56,6 +86,43 @@
   padding-bottom: 10px;
 }
 
+/* Packet Identifier */
+.packet-identifier {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 15px;
+  margin-bottom: 20px;
+  background: linear-gradient(135deg, rgba(0, 188, 212, 0.1) 0%, rgba(0, 188, 212, 0.05) 100%);
+  border-left: 4px solid #00bcd4;
+  border-radius: 4px;
+  font-family: 'Courier New', monospace;
+}
+
+.identifier-label {
+  font-size: 12px;
+  color: #999;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.identifier-value {
+  font-size: 16px;
+  font-weight: bold;
+  color: #00bcd4;
+}
+
+.identifier-separator {
+  color: #555;
+  font-size: 12px;
+}
+
+.identifier-skb {
+  font-size: 11px;
+  color: #888;
+  cursor: help;
+}
+
 .detail-section h5 {
   margin: 20px 0 10px 0;
   font-size: 16px;
@@ -95,6 +162,11 @@
 .info-item span.mono {
   font-family: 'Courier New', monospace;
   font-size: 12px;
+}
+
+.info-item span.highlight-changes {
+  color: #ff9800;
+  font-weight: bold;
 }
 
 /* Badges */

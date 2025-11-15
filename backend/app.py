@@ -1244,10 +1244,40 @@ class TraceAnalyzer:
             hook = filters['hook'].upper()
             filtered = [t for t in filtered if t.get('hook_name') == hook]
 
-        # Filter by verdict
+        # Filter by final verdict
         if 'verdict' in filters and filters['verdict']:
             verdict = filters['verdict'].upper()
             filtered = [t for t in filtered if t.get('final_verdict') == verdict]
+
+        # Filter by any verdict (including intermediate verdicts in events)
+        if 'any_verdict' in filters and filters['any_verdict']:
+            verdict = filters['any_verdict'].upper()
+            def has_verdict(trace):
+                # Check final verdict
+                if trace.get('final_verdict') == verdict:
+                    return True
+                # Check important_events for intermediate verdicts
+                events = trace.get('important_events', [])
+                for event in events:
+                    # Check verdict in different event types
+                    event_verdict = event.get('verdict_str') or event.get('verdict')
+                    if event_verdict:
+                        if isinstance(event_verdict, str) and event_verdict.upper() == verdict:
+                            return True
+                        elif isinstance(event_verdict, int):
+                            # Map verdict codes to names
+                            verdict_map = {0: 'DROP', 1: 'ACCEPT', 2: 'STOLEN',
+                                          3: 'QUEUE', 4: 'REPEAT', 5: 'STOP',
+                                          -1: 'JUMP', -2: 'GOTO', -3: 'RETURN'}
+                            if verdict_map.get(event_verdict, '').upper() == verdict:
+                                return True
+                return False
+            filtered = [t for t in filtered if has_verdict(t)]
+
+        # Filter packets that had verdict changes
+        if 'had_verdict_change' in filters and filters['had_verdict_change']:
+            if filters['had_verdict_change'].lower() in ['true', '1', 'yes']:
+                filtered = [t for t in filtered if t.get('verdict_changes', 0) > 0]
 
         # Filter by function name
         if 'function' in filters and filters['function']:
@@ -1382,6 +1412,8 @@ def get_trace_packets(filename):
         'skb': request.args.get('skb'),
         'hook': request.args.get('hook'),
         'verdict': request.args.get('verdict'),
+        'any_verdict': request.args.get('any_verdict'),
+        'had_verdict_change': request.args.get('had_verdict_change'),
         'function': request.args.get('function'),
         'keyword': request.args.get('keyword')
     }
@@ -1390,6 +1422,11 @@ def get_trace_packets(filename):
     filters = {k: v for k, v in filters.items() if v}
 
     traces = trace_data.get('traces', [])
+
+    # Add original index to each trace before filtering
+    for i, trace in enumerate(traces):
+        trace['original_index'] = i
+
     filtered_traces = TraceAnalyzer.filter_packets(traces, filters)
 
     # Add pagination support

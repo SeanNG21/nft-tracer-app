@@ -154,7 +154,7 @@ const PacketList = ({
             </div>
 
             <div className="filter-group">
-              <label>Verdict</label>
+              <label>Final Verdict</label>
               <select
                 value={filters.verdict}
                 onChange={(e) => handleFilterChange('verdict', e.target.value)}
@@ -168,6 +168,41 @@ const PacketList = ({
                 <option value="GOTO">GOTO</option>
                 <option value="RETURN">RETURN</option>
               </select>
+            </div>
+
+            <div className="filter-group">
+              <label>Any Verdict (Including Intermediate) 🔍</label>
+              <select
+                value={filters.any_verdict}
+                onChange={(e) => handleFilterChange('any_verdict', e.target.value)}
+              >
+                <option value="">All</option>
+                <option value="ACCEPT">ACCEPT</option>
+                <option value="DROP">DROP</option>
+                <option value="STOLEN">STOLEN</option>
+                <option value="QUEUE">QUEUE</option>
+                <option value="JUMP">JUMP</option>
+                <option value="GOTO">GOTO</option>
+                <option value="RETURN">RETURN</option>
+              </select>
+              <small className="filter-hint">
+                Find packets that had this verdict at any point during processing
+              </small>
+            </div>
+
+            <div className="filter-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={filters.had_verdict_change}
+                  onChange={(e) => handleFilterChange('had_verdict_change', e.target.checked)}
+                  style={{ marginRight: '8px' }}
+                />
+                Only packets with verdict changes
+              </label>
+              <small className="filter-hint">
+                Show only packets where verdict changed during processing
+              </small>
             </div>
 
             <div className="filter-group">
@@ -233,7 +268,10 @@ const PacketList = ({
                   Hook {sortField === 'hook_name' && (sortDirection === 'asc' ? '↑' : '↓')}
                 </th>
                 <th onClick={() => handleSort('final_verdict')}>
-                  Verdict {sortField === 'final_verdict' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  Final Verdict {sortField === 'final_verdict' && (sortDirection === 'asc' ? '↑' : '↓')}
+                </th>
+                <th onClick={() => handleSort('verdict_changes')}>
+                  Changes {sortField === 'verdict_changes' && (sortDirection === 'asc' ? '↑' : '↓')}
                 </th>
                 <th>Functions</th>
                 <th>SKB</th>
@@ -242,18 +280,20 @@ const PacketList = ({
             <tbody>
               {sortedPackets.length === 0 ? (
                 <tr>
-                  <td colSpan="9" className="no-data">
+                  <td colSpan="10" className="no-data">
                     No packets found
                   </td>
                 </tr>
               ) : (
                 sortedPackets.map((packet, index) => (
                   <tr
-                    key={index}
+                    key={packet.original_index || index}
                     className={`packet-row ${
-                      selectedPacket?.packet_index === index ? 'selected' : ''
-                    } verdict-${packet.final_verdict?.toLowerCase()}`}
-                    onClick={() => onPacketSelect(packet, index)}
+                      selectedPacket?.original_index === packet.original_index ? 'selected' : ''
+                    } verdict-${packet.final_verdict?.toLowerCase()} ${
+                      packet.verdict_changes > 0 ? 'has-verdict-changes' : ''
+                    }`}
+                    onClick={() => onPacketSelect(packet)}
                   >
                     <td className="time">{formatTimestamp(packet.first_seen)}</td>
                     <td className="duration">{formatDuration(packet.duration_ns)}</td>
@@ -269,6 +309,15 @@ const PacketList = ({
                     <td className="hook">{packet.hook_name || 'N/A'}</td>
                     <td className={`verdict verdict-${packet.final_verdict?.toLowerCase()}`}>
                       {packet.final_verdict || 'N/A'}
+                    </td>
+                    <td className="verdict-changes">
+                      {packet.verdict_changes > 0 ? (
+                        <span className="changes-badge" title={`Verdict changed ${packet.verdict_changes} time(s)`}>
+                          ⚠️ {packet.verdict_changes}
+                        </span>
+                      ) : (
+                        <span className="no-changes">-</span>
+                      )}
                     </td>
                     <td className="functions">
                       {packet.unique_functions} / {packet.total_functions_called}
