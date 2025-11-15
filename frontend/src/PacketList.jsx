@@ -287,13 +287,13 @@ const PacketList = ({
               ) : (
                 sortedPackets.map((packet, index) => (
                   <tr
-                    key={index}
+                    key={packet.original_index || index}
                     className={`packet-row ${
-                      selectedPacket?.packet_index === index ? 'selected' : ''
+                      selectedPacket?.original_index === packet.original_index ? 'selected' : ''
                     } verdict-${packet.final_verdict?.toLowerCase()} ${
                       packet.verdict_changes > 0 ? 'has-verdict-changes' : ''
                     }`}
-                    onClick={() => onPacketSelect(packet, index)}
+                    onClick={() => onPacketSelect(packet)}
                   >
                     <td className="time">{formatTimestamp(packet.first_seen)}</td>
                     <td className="duration">{formatDuration(packet.duration_ns)}</td>

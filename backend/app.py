@@ -1392,6 +1392,11 @@ def get_trace_packets(filename):
     filters = {k: v for k, v in filters.items() if v}
 
     traces = trace_data.get('traces', [])
+
+    # Add original index to each trace before filtering
+    for i, trace in enumerate(traces):
+        trace['original_index'] = i
+
     filtered_traces = TraceAnalyzer.filter_packets(traces, filters)
 
     # Add pagination support
