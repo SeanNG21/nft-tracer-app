@@ -23,6 +23,13 @@ import psutil
 from btf_skb_discoverer import BTFSKBDiscoverer
 
 try:
+    from nft_ruleset_parser import get_ruleset_parser
+    NFT_PARSER_AVAILABLE = True
+except ImportError as e:
+    NFT_PARSER_AVAILABLE = False
+    print(f"WARNING: NFT ruleset parser not available: {e}")
+
+try:
     from bcc import BPF
     BCC_AVAILABLE = True
 except ImportError:
@@ -311,6 +318,20 @@ class PacketTrace:
             'chain_depth': event.chain_depth, 'cpu_id': event.cpu_id,
             'comm': event.comm, 'hook': event.hook, 'pf': event.pf
         }
+
+        # Enrich with rule definition if available
+        if NFT_PARSER_AVAILABLE and event.rule_handle > 0:
+            try:
+                parser = get_ruleset_parser()
+                rule = parser.get_rule_by_handle(event.rule_handle)
+                if rule:
+                    event_dict['rule_text'] = rule.rule_text
+                    event_dict['rule_table'] = rule.table
+                    event_dict['rule_chain'] = rule.chain
+                    event_dict['rule_family'] = rule.family
+            except Exception as e:
+                # Silently fail if ruleset parser has issues
+                pass
         
         if len(self.events) > 0:
             for prev_event in reversed(self.events):

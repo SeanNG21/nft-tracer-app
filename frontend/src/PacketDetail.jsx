@@ -386,6 +386,24 @@ const PacketDetail = ({ packet, onClose }) => {
                 {event.trace_type === 'rule_eval' && (
                   <div className="event-section">
                     <h5>Rule Evaluation Details</h5>
+
+                    {/* Rule Definition - Highlighted */}
+                    {event.rule_text && (
+                      <div className="rule-definition">
+                        <label>Rule Definition:</label>
+                        <div className="rule-text">{event.rule_text}</div>
+                        {event.rule_table && event.rule_chain && (
+                          <div className="rule-location">
+                            <span className="rule-family">{event.rule_family || 'ip'}</span>
+                            <span className="rule-sep">›</span>
+                            <span className="rule-table">{event.rule_table}</span>
+                            <span className="rule-sep">›</span>
+                            <span className="rule-chain">{event.rule_chain}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     <div className="event-info-grid">
                       <div className="info-field">
                         <label>Rule Sequence:</label>
