@@ -126,8 +126,21 @@ class NFTRule:
         return ' '.join(parts) if parts else '(no expressions)'
 
     @staticmethod
-    def _format_expr(expr: Dict) -> str:
+    def _format_expr(expr) -> str:
         """Format expression component"""
+        # Handle primitive types first (before checking dict keys)
+        if isinstance(expr, (int, str)):
+            return str(expr)
+
+        elif isinstance(expr, list):
+            # List of values: { 80, 443 }
+            return "{ " + ", ".join(str(v) for v in expr) + " }"
+
+        # Now check if expr is a dict
+        if not isinstance(expr, dict):
+            return str(expr)
+
+        # Handle dict-based expressions
         if 'payload' in expr:
             # Payload: tcp dport, ip saddr, etc.
             payload = expr['payload']
@@ -146,13 +159,6 @@ class NFTRule:
             ct = expr['ct']
             key = ct.get('key', '')
             return f"ct {key}"
-
-        elif isinstance(expr, (int, str)):
-            return str(expr)
-
-        elif isinstance(expr, list):
-            # List of values: { 80, 443 }
-            return "{ " + ", ".join(str(v) for v in expr) + " }"
 
         elif 'set' in expr:
             # Set reference
