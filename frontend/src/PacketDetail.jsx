@@ -4,15 +4,28 @@ import './PacketDetail.css';
 const PacketDetail = ({ packet, onClose }) => {
   const [activeTab, setActiveTab] = useState('overview');
 
-  if (!packet) return null;
+  // Show placeholder if no packet selected
+  if (!packet) {
+    return (
+      <div className="packet-detail">
+        <div className="detail-placeholder">
+          <div className="placeholder-icon">📦</div>
+          <h3>No Packet Selected</h3>
+          <p>Click on a packet in the list to view detailed information</p>
+        </div>
+      </div>
+    );
+  }
 
   // Format timestamp
   const formatTimestamp = (ns) => {
+    if (!ns && ns !== 0) return 'N/A';
     return (ns / 1000000).toFixed(3) + ' ms';
   };
 
   // Format duration
   const formatDuration = (ns) => {
+    if (!ns && ns !== 0) return 'N/A';
     if (ns < 1000) return ns + ' ns';
     if (ns < 1000000) return (ns / 1000).toFixed(2) + ' μs';
     return (ns / 1000000).toFixed(2) + ' ms';
@@ -22,10 +35,27 @@ const PacketDetail = ({ packet, onClose }) => {
   const renderOverview = () => (
     <div className="detail-section">
       <h4>Packet Information</h4>
+
+      {/* Debug info - shows which packet is selected */}
+      {packet.original_index !== undefined && (
+        <div className="packet-identifier">
+          <span className="identifier-label">Packet Index:</span>
+          <span className="identifier-value">#{packet.original_index}</span>
+          {packet.skb_addr && (
+            <>
+              <span className="identifier-separator">•</span>
+              <span className="identifier-skb" title={packet.skb_addr}>
+                {packet.skb_addr.substring(0, 16)}...
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
       <div className="info-grid">
         <div className="info-item">
           <label>SKB Address</label>
-          <span className="mono">{packet.skb_addr}</span>
+          <span className="mono">{packet.skb_addr || 'N/A'}</span>
         </div>
         <div className="info-item">
           <label>Protocol</label>
@@ -69,19 +99,22 @@ const PacketDetail = ({ packet, onClose }) => {
         </div>
         <div className="info-item">
           <label>Unique Functions</label>
-          <span>{packet.unique_functions}</span>
+          <span>{packet.unique_functions ?? 0}</span>
         </div>
         <div className="info-item">
           <label>Total Functions Called</label>
-          <span>{packet.total_functions_called}</span>
+          <span>{packet.total_functions_called ?? 0}</span>
         </div>
         <div className="info-item">
           <label>Rules Evaluated</label>
-          <span>{packet.total_rules_evaluated}</span>
+          <span>{packet.total_rules_evaluated ?? 0}</span>
         </div>
         <div className="info-item">
           <label>Verdict Changes</label>
-          <span>{packet.verdict_changes}</span>
+          <span className={packet.verdict_changes > 0 ? 'highlight-changes' : ''}>
+            {packet.verdict_changes ?? 0}
+            {packet.verdict_changes > 0 && ' ⚠️'}
+          </span>
         </div>
         <div className="info-item">
           <label>All Events</label>

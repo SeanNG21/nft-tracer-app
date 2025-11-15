@@ -273,13 +273,41 @@ class PacketTrace:
             self.dst_port = event.dst_port if event.dst_port > 0 else None
     
     def add_nft_event(self, event: NFTEvent):
-        """Add NFT rule evaluation event"""
+        """Add NFT rule evaluation event with deduplication support"""
+
+        # FIX: Deduplicate events - check if same expr_addr within time window
+        # This prevents logging the same expression evaluation multiple times
+        #
+        # DEDUP_WINDOW: 5 microseconds (5000 nanoseconds)
+        # Rationale: Same expression evaluated within 5us is likely a duplicate
+        # - Observed duplicate with 1079ns delta (exceeds 1us threshold)
+        # - 5us is safe margin while still detecting real duplicates
+        # - Normal different expressions have >10us separation
+        DEDUP_WINDOW_NS = 5000  # 5 microseconds
+
+        if event.expr_addr > 0:
+            dedup_key = (event.skb_addr, event.expr_addr)
+
+            if hasattr(self, '_last_expr_eval'):
+                last_key, last_ts = self._last_expr_eval
+                if (last_key == dedup_key and
+                    abs(event.timestamp - last_ts) < DEDUP_WINDOW_NS):
+                    # Same expression evaluated within window → duplicate!
+                    # Skip to avoid duplicate logging
+                    return
+
+            self._last_expr_eval = (dedup_key, event.timestamp)
+
         event_dict = {
             'timestamp': event.timestamp,
             'trace_type': self._trace_type_str(event.trace_type),
             'verdict': self._verdict_str(event.verdict),
-            'verdict_code': event.verdict, 'rule_seq': event.rule_seq,
-            'rule_handle': event.rule_handle if event.rule_handle > 0 else None,
+            'verdict_code': event.verdict,
+            'verdict_raw': event.verdict_raw,  # FIX: Include raw verdict for debugging
+            'rule_seq': event.rule_seq,
+            'rule_handle': event.rule_handle,  # FIX: Always include, even if 0
+            'expr_addr': hex(event.expr_addr) if event.expr_addr > 0 else None,  # FIX: Add expr_addr
+            'chain_addr': hex(event.chain_addr) if event.chain_addr > 0 else None,  # FIX: Add chain_addr
             'chain_depth': event.chain_depth, 'cpu_id': event.cpu_id,
             'comm': event.comm, 'hook': event.hook, 'pf': event.pf
         }
@@ -1216,10 +1244,40 @@ class TraceAnalyzer:
             hook = filters['hook'].upper()
             filtered = [t for t in filtered if t.get('hook_name') == hook]
 
-        # Filter by verdict
+        # Filter by final verdict
         if 'verdict' in filters and filters['verdict']:
             verdict = filters['verdict'].upper()
             filtered = [t for t in filtered if t.get('final_verdict') == verdict]
+
+        # Filter by any verdict (including intermediate verdicts in events)
+        if 'any_verdict' in filters and filters['any_verdict']:
+            verdict = filters['any_verdict'].upper()
+            def has_verdict(trace):
+                # Check final verdict
+                if trace.get('final_verdict') == verdict:
+                    return True
+                # Check important_events for intermediate verdicts
+                events = trace.get('important_events', [])
+                for event in events:
+                    # Check verdict in different event types
+                    event_verdict = event.get('verdict_str') or event.get('verdict')
+                    if event_verdict:
+                        if isinstance(event_verdict, str) and event_verdict.upper() == verdict:
+                            return True
+                        elif isinstance(event_verdict, int):
+                            # Map verdict codes to names
+                            verdict_map = {0: 'DROP', 1: 'ACCEPT', 2: 'STOLEN',
+                                          3: 'QUEUE', 4: 'REPEAT', 5: 'STOP',
+                                          -1: 'JUMP', -2: 'GOTO', -3: 'RETURN'}
+                            if verdict_map.get(event_verdict, '').upper() == verdict:
+                                return True
+                return False
+            filtered = [t for t in filtered if has_verdict(t)]
+
+        # Filter packets that had verdict changes
+        if 'had_verdict_change' in filters and filters['had_verdict_change']:
+            if filters['had_verdict_change'].lower() in ['true', '1', 'yes']:
+                filtered = [t for t in filtered if t.get('verdict_changes', 0) > 0]
 
         # Filter by function name
         if 'function' in filters and filters['function']:
@@ -1354,6 +1412,8 @@ def get_trace_packets(filename):
         'skb': request.args.get('skb'),
         'hook': request.args.get('hook'),
         'verdict': request.args.get('verdict'),
+        'any_verdict': request.args.get('any_verdict'),
+        'had_verdict_change': request.args.get('had_verdict_change'),
         'function': request.args.get('function'),
         'keyword': request.args.get('keyword')
     }
@@ -1362,6 +1422,11 @@ def get_trace_packets(filename):
     filters = {k: v for k, v in filters.items() if v}
 
     traces = trace_data.get('traces', [])
+
+    # Add original index to each trace before filtering
+    for i, trace in enumerate(traces):
+        trace['original_index'] = i
+
     filtered_traces = TraceAnalyzer.filter_packets(traces, filters)
 
     # Add pagination support
