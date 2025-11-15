@@ -190,11 +190,12 @@ class NFTRule:
 class NFTRulesetParser:
     """Parse nftables ruleset và cache rule definitions"""
 
-    def __init__(self):
+    def __init__(self, debug=False):
         self.rules: Dict[int, NFTRule] = {}  # handle -> NFTRule
         self.tables: Dict[str, Dict] = {}     # family:table -> table info
         self.chains: Dict[str, Dict] = {}     # family:table:chain -> chain info
         self._loaded = False
+        self.debug = debug
 
     def load_ruleset(self) -> bool:
         """Load nftables ruleset using 'nft -j list ruleset'"""
@@ -266,14 +267,23 @@ class NFTRulesetParser:
         expr_list = rule.get('expr', [])
 
         if handle is not None:
-            nft_rule = NFTRule(
-                handle=handle,
-                table=table,
-                chain=chain,
-                family=family,
-                expr_list=expr_list
-            )
-            self.rules[handle] = nft_rule
+            try:
+                nft_rule = NFTRule(
+                    handle=handle,
+                    table=table,
+                    chain=chain,
+                    family=family,
+                    expr_list=expr_list
+                )
+                self.rules[handle] = nft_rule
+
+                if self.debug:
+                    print(f"[DEBUG] Parsed rule handle={handle}: {nft_rule.rule_text}")
+            except Exception as e:
+                print(f"[!] Failed to parse rule handle={handle}: {e}")
+                if self.debug:
+                    import traceback
+                    traceback.print_exc()
 
     def get_rule_by_handle(self, handle: int) -> Optional[NFTRule]:
         """Get rule by handle"""

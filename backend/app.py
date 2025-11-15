@@ -329,9 +329,19 @@ class PacketTrace:
                     event_dict['rule_table'] = rule.table
                     event_dict['rule_chain'] = rule.chain
                     event_dict['rule_family'] = rule.family
+                else:
+                    # Rule not found in ruleset - this is normal if rules changed
+                    # after tracing started
+                    if not hasattr(self, '_warned_handles'):
+                        self._warned_handles = set()
+                    if event.rule_handle not in self._warned_handles:
+                        print(f"[DEBUG] Rule handle {event.rule_handle} not found in ruleset")
+                        self._warned_handles.add(event.rule_handle)
             except Exception as e:
-                # Silently fail if ruleset parser has issues
-                pass
+                # Log error for debugging
+                print(f"[!] Error enriching rule handle {event.rule_handle}: {e}")
+                import traceback
+                traceback.print_exc()
         
         if len(self.events) > 0:
             for prev_event in reversed(self.events):
