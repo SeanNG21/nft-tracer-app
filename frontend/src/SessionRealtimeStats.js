@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
+import PacketDetailsModal from './PacketDetailsModal';
 import './Realtime.css';
 
 const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 'http://localhost:5000';
@@ -36,7 +37,8 @@ function SessionRealtimeStats({ sessionId }) {
   const [connected, setConnected] = useState(false);
   const [stats, setStats] = useState(null);
   const [expandedHooks, setExpandedHooks] = useState(new Set());
-  
+  const [selectedEvent, setSelectedEvent] = useState(null);
+
   const socketRef = useRef(null);
 
   // Initialize Socket.IO connection
@@ -374,7 +376,17 @@ function SessionRealtimeStats({ sessionId }) {
               </thead>
               <tbody>
                 {stats.recent_events.slice(-10).reverse().map((evt, idx) => (
-                  <tr key={idx} style={{ borderBottom: '1px solid #e9ecef' }}>
+                  <tr
+                    key={idx}
+                    style={{
+                      borderBottom: '1px solid #e9ecef',
+                      cursor: 'pointer',
+                      transition: 'background 0.2s'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    onClick={() => setSelectedEvent(evt)}
+                  >
                     <td style={{ padding: '0.75rem' }}>
                       <span style={{
                         padding: '0.25rem 0.5rem',
@@ -396,9 +408,9 @@ function SessionRealtimeStats({ sessionId }) {
                         borderRadius: '4px',
                         fontSize: '0.75rem',
                         fontWeight: '600',
-                        background: evt.verdict_name === 'ACCEPT' ? '#d4edda' : 
+                        background: evt.verdict_name === 'ACCEPT' ? '#d4edda' :
                                    evt.verdict_name === 'DROP' ? '#f8d7da' : '#e9ecef',
-                        color: evt.verdict_name === 'ACCEPT' ? '#155724' : 
+                        color: evt.verdict_name === 'ACCEPT' ? '#155724' :
                                evt.verdict_name === 'DROP' ? '#721c24' : '#666'
                       }}>
                         {evt.verdict_name || '-'}
@@ -423,8 +435,17 @@ function SessionRealtimeStats({ sessionId }) {
         <div className="empty-events">
           <p>📈 Stats update mỗi 1 giây qua WebSocket</p>
           <p className="hint">✨ Không cần refresh - tất cả realtime!</p>
+          <p className="hint">💡 Click vào event trong table để xem chi tiết đầy đủ</p>
         </div>
       </div>
+
+      {/* Packet Details Modal */}
+      {selectedEvent && (
+        <PacketDetailsModal
+          event={selectedEvent}
+          onClose={() => setSelectedEvent(null)}
+        />
+      )}
     </div>
   );
 }
