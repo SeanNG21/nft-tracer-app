@@ -275,16 +275,24 @@ class PacketTrace:
     def add_nft_event(self, event: NFTEvent):
         """Add NFT rule evaluation event with deduplication support"""
 
-        # FIX: Deduplicate events - check if same expr_addr within 1us window
+        # FIX: Deduplicate events - check if same expr_addr within time window
         # This prevents logging the same expression evaluation multiple times
+        #
+        # DEDUP_WINDOW: 5 microseconds (5000 nanoseconds)
+        # Rationale: Same expression evaluated within 5us is likely a duplicate
+        # - Observed duplicate with 1079ns delta (exceeds 1us threshold)
+        # - 5us is safe margin while still detecting real duplicates
+        # - Normal different expressions have >10us separation
+        DEDUP_WINDOW_NS = 5000  # 5 microseconds
+
         if event.expr_addr > 0:
             dedup_key = (event.skb_addr, event.expr_addr)
 
             if hasattr(self, '_last_expr_eval'):
                 last_key, last_ts = self._last_expr_eval
                 if (last_key == dedup_key and
-                    abs(event.timestamp - last_ts) < 1000):  # 1us = 1000ns
-                    # Same expression evaluated within 1us → likely duplicate
+                    abs(event.timestamp - last_ts) < DEDUP_WINDOW_NS):
+                    # Same expression evaluated within window → duplicate!
                     # Skip to avoid duplicate logging
                     return
 
