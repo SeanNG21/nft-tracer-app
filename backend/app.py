@@ -320,28 +320,40 @@ class PacketTrace:
         }
 
         # Enrich with rule definition if available
-        if NFT_PARSER_AVAILABLE and event.rule_handle > 0:
-            try:
-                parser = get_ruleset_parser()
-                rule = parser.get_rule_by_handle(event.rule_handle)
-                if rule:
-                    event_dict['rule_text'] = rule.rule_text
-                    event_dict['rule_table'] = rule.table
-                    event_dict['rule_chain'] = rule.chain
-                    event_dict['rule_family'] = rule.family
-                else:
-                    # Rule not found in ruleset - this is normal if rules changed
-                    # after tracing started
-                    if not hasattr(self, '_warned_handles'):
-                        self._warned_handles = set()
-                    if event.rule_handle not in self._warned_handles:
-                        print(f"[DEBUG] Rule handle {event.rule_handle} not found in ruleset")
-                        self._warned_handles.add(event.rule_handle)
-            except Exception as e:
-                # Log error for debugging
-                print(f"[!] Error enriching rule handle {event.rule_handle}: {e}")
-                import traceback
-                traceback.print_exc()
+        if event.rule_handle > 0:
+            if not NFT_PARSER_AVAILABLE:
+                # Only warn once
+                if not hasattr(self, '_parser_unavailable_warned'):
+                    print(f"[!] NFT Parser not available - rule definitions disabled")
+                    self._parser_unavailable_warned = True
+            else:
+                try:
+                    parser = get_ruleset_parser()
+                    rule = parser.get_rule_by_handle(event.rule_handle)
+                    if rule:
+                        event_dict['rule_text'] = rule.rule_text
+                        event_dict['rule_table'] = rule.table
+                        event_dict['rule_chain'] = rule.chain
+                        event_dict['rule_family'] = rule.family
+                        # Debug: log first few enrichments
+                        if not hasattr(self, '_enriched_count'):
+                            self._enriched_count = 0
+                        self._enriched_count += 1
+                        if self._enriched_count <= 3:
+                            print(f"[DEBUG] Enriched rule handle {event.rule_handle}: {rule.rule_text}")
+                    else:
+                        # Rule not found in ruleset - this is normal if rules changed
+                        # after tracing started
+                        if not hasattr(self, '_warned_handles'):
+                            self._warned_handles = set()
+                        if event.rule_handle not in self._warned_handles:
+                            print(f"[DEBUG] Rule handle {event.rule_handle} not found in ruleset")
+                            self._warned_handles.add(event.rule_handle)
+                except Exception as e:
+                    # Log error for debugging
+                    print(f"[!] Error enriching rule handle {event.rule_handle}: {e}")
+                    import traceback
+                    traceback.print_exc()
         
         if len(self.events) > 0:
             for prev_event in reversed(self.events):
@@ -1541,9 +1553,29 @@ if __name__ == '__main__':
     print("=" * 70)
     print(f"BCC: {'✓' if BCC_AVAILABLE else '✗'}")
     print(f"Realtime: {'✓' if REALTIME_AVAILABLE else '✗'}")
+    print(f"NFT Parser: {'✓' if NFT_PARSER_AVAILABLE else '✗'}")
     print(f"Kernel: {platform.release()}")
     print(f"Hostname: {socket.gethostname()}")
     print("=" * 70)
+
+    # Preload NFT parser if available
+    if NFT_PARSER_AVAILABLE:
+        try:
+            print("[*] Preloading NFT ruleset parser...")
+            parser = get_ruleset_parser()
+            if parser._loaded:
+                print(f"[✓] NFT Parser ready: {len(parser.rules)} rules loaded")
+            else:
+                print("[!] NFT Parser failed to load ruleset")
+        except Exception as e:
+            print(f"[!] NFT Parser error: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print("[!] NFT Parser not available - rule definitions will not be shown")
+        print("[!] To enable: ensure nft_ruleset_parser.py is present")
+    print("=" * 70)
+
     print("MODES:")
     print("  • nft      - NFT rules only")
     print("  • universal - Kernel functions only")
