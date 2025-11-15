@@ -8,7 +8,13 @@ echo "==========================================================================
 echo "Generated: $(date)"
 echo ""
 
-cd /home/user/nft-tracer-app
+# Detect repository root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
+echo "Repository: $REPO_ROOT"
+echo ""
 
 echo "## 1. GIT STATUS"
 echo "--------------------------------------------------------------------------------"
@@ -86,7 +92,7 @@ echo ""
 
 echo "## 8. TEST PARSER IMPORT"
 echo "--------------------------------------------------------------------------------"
-cd backend
+cd "$REPO_ROOT/backend"
 python3 << 'EOF'
 import sys
 try:
@@ -102,9 +108,8 @@ echo ""
 echo "## 9. TEST PARSER INITIALIZATION (requires sudo)"
 echo "--------------------------------------------------------------------------------"
 echo "Running: sudo python3 test_backend_startup.py"
-cd backend
+cd "$REPO_ROOT/backend"
 sudo python3 test_backend_startup.py 2>&1 | head -40
-cd ..
 echo ""
 
 echo "================================================================================"
