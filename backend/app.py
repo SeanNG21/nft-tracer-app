@@ -273,13 +273,33 @@ class PacketTrace:
             self.dst_port = event.dst_port if event.dst_port > 0 else None
     
     def add_nft_event(self, event: NFTEvent):
-        """Add NFT rule evaluation event"""
+        """Add NFT rule evaluation event with deduplication support"""
+
+        # FIX: Deduplicate events - check if same expr_addr within 1us window
+        # This prevents logging the same expression evaluation multiple times
+        if event.expr_addr > 0:
+            dedup_key = (event.skb_addr, event.expr_addr)
+
+            if hasattr(self, '_last_expr_eval'):
+                last_key, last_ts = self._last_expr_eval
+                if (last_key == dedup_key and
+                    abs(event.timestamp - last_ts) < 1000):  # 1us = 1000ns
+                    # Same expression evaluated within 1us → likely duplicate
+                    # Skip to avoid duplicate logging
+                    return
+
+            self._last_expr_eval = (dedup_key, event.timestamp)
+
         event_dict = {
             'timestamp': event.timestamp,
             'trace_type': self._trace_type_str(event.trace_type),
             'verdict': self._verdict_str(event.verdict),
-            'verdict_code': event.verdict, 'rule_seq': event.rule_seq,
-            'rule_handle': event.rule_handle if event.rule_handle > 0 else None,
+            'verdict_code': event.verdict,
+            'verdict_raw': event.verdict_raw,  # FIX: Include raw verdict for debugging
+            'rule_seq': event.rule_seq,
+            'rule_handle': event.rule_handle,  # FIX: Always include, even if 0
+            'expr_addr': hex(event.expr_addr) if event.expr_addr > 0 else None,  # FIX: Add expr_addr
+            'chain_addr': hex(event.chain_addr) if event.chain_addr > 0 else None,  # FIX: Add chain_addr
             'chain_depth': event.chain_depth, 'cpu_id': event.cpu_id,
             'comm': event.comm, 'hook': event.hook, 'pf': event.pf
         }
