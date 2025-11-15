@@ -572,6 +572,11 @@ body {
   gap: 0.5rem;
 }
 
+.file-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
 /* Empty State */
 .empty-state {
   text-align: center;
@@ -682,4 +687,26 @@ body {
     gap: 1rem;
     align-items: flex-start;
   }
+}
+
+/* Trace Analyzer View */
+.trace-analyzer-view {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 80px);
+  background-color: #1e1e1e;
+}
+
+.trace-analyzer-header {
+  padding: 15px 20px;
+  background-color: #252525;
+  border-bottom: 2px solid #333;
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.trace-analyzer-header .btn {
+  padding: 10px 20px;
+  font-size: 14px;
 }

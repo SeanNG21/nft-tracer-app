@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import RealtimeView from './RealtimeView';
 import SessionRealtimeStats from './SessionRealtimeStats';
+import TraceViewer from './TraceViewer';
 import './App.css';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
@@ -26,6 +27,7 @@ function App() {
   const [discovering, setDiscovering] = useState(false);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('sessions'); // sessions, realtime, discovery, files
+  const [selectedTraceFile, setSelectedTraceFile] = useState(null); // For trace analyzer
 
   // Load initial data
   useEffect(() => {
@@ -223,7 +225,21 @@ function App() {
         </div>
       )}
 
-      <div className="container">
+      {/* Trace Analyzer View */}
+      {selectedTraceFile ? (
+        <div className="trace-analyzer-view">
+          <div className="trace-analyzer-header">
+            <button
+              className="btn btn-secondary"
+              onClick={() => setSelectedTraceFile(null)}
+            >
+              ← Back to Files
+            </button>
+          </div>
+          <TraceViewer filename={selectedTraceFile} />
+        </div>
+      ) : (
+        <div className="container">
         {/* Tabs */}
         <div className="tabs">
           <button 
@@ -652,24 +668,31 @@ function App() {
                         <span>{new Date(file.created).toLocaleString()}</span>
                       </div>
                     </div>
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => downloadFile(file.filename)}
-                    >
-                      ⬇️ Download
-                    </button>
+                    <div className="file-actions">
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => setSelectedTraceFile(file.filename)}
+                      >
+                        🔍 Analyze
+                      </button>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => downloadFile(file.filename)}
+                      >
+                        ⬇️ Download
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
             )}
           </section>
         )}
-      </div>
+        </div>
 
-      <footer className="footer">
-        <p>Kernel Packet Tracer v2.0 | eBPF + BTF Discovery + Realtime</p>
-        <p>Full Mode, NFT Mode & Universal Mode | Built with BCC & React</p>
-      </footer>
+        
+      )}
+       
     </div>
   );
 }
