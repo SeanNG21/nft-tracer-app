@@ -141,11 +141,18 @@ class PacketEvent:
     function: str
     layer: str
     comm: str
-    
+
+    # NFT-specific fields (for detailed packet trace analysis)
     chain_addr: Optional[str] = None
+    chain_name: Optional[str] = None
+    chain_depth: Optional[int] = None
     rule_seq: Optional[int] = None
     rule_handle: Optional[int] = None
+    rule_type: Optional[str] = None
+    expr_addr: Optional[str] = None
+    regs_addr: Optional[str] = None
     queue_num: Optional[int] = None
+    has_queue_bypass: Optional[int] = None
 
 @dataclass
 class LayerStats:
@@ -585,10 +592,18 @@ class RealtimeTracer:
                 function=func_name,
                 layer=layer,
                 comm=event.comm.decode('utf-8', errors='ignore'),
+                # NFT-specific fields (for detailed packet trace analysis)
                 chain_addr=hex(event.chain_addr) if event.chain_addr else None,
+                chain_depth=event.chain_depth if hasattr(event, 'chain_depth') else None,
                 rule_seq=event.rule_seq if event.rule_seq > 0 else None,
                 rule_handle=event.rule_handle if event.rule_handle > 0 else None,
-                queue_num=event.queue_num if event.queue_num > 0 else None
+                expr_addr=hex(event.expr_addr) if hasattr(event, 'expr_addr') and event.expr_addr else None,
+                queue_num=event.queue_num if event.queue_num > 0 else None,
+                has_queue_bypass=event.has_queue_bypass if hasattr(event, 'has_queue_bypass') else None,
+                # Note: regs_addr and chain_name not available in full_tracer events
+                regs_addr=None,
+                chain_name=None,
+                rule_type=None
             )
             
             # Process event and update stats (no longer emit individual events)
