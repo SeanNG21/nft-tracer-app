@@ -31,6 +31,42 @@ const PacketDetail = ({ packet, onClose }) => {
     return (ns / 1000000).toFixed(2) + ' ms';
   };
 
+  // Format hook name
+  const formatHookName = (hook) => {
+    if (hook === null || hook === undefined) return 'N/A';
+    const hooks = {
+      0: 'PREROUTING',
+      1: 'INPUT',
+      2: 'FORWARD',
+      3: 'OUTPUT',
+      4: 'POSTROUTING',
+      255: 'UNKNOWN'
+    };
+    return hooks[hook] || `HOOK_${hook}`;
+  };
+
+  // Format protocol family
+  const formatProtocolFamily = (pf) => {
+    if (pf === null || pf === undefined) return 'N/A';
+    const families = {
+      2: 'IPv4',
+      10: 'IPv6',
+      7: 'BRIDGE',
+      0: 'UNSPEC'
+    };
+    return families[pf] || `PF_${pf}`;
+  };
+
+  // Format address (show full or truncated)
+  const formatAddress = (addr, full = false) => {
+    if (!addr) return 'N/A';
+    if (typeof addr === 'number') {
+      addr = '0x' + addr.toString(16);
+    }
+    if (full || addr.length <= 20) return addr;
+    return addr.substring(0, 18) + '...';
+  };
+
   // Render packet overview
   const renderOverview = () => (
     <div className="detail-section">
@@ -233,56 +269,254 @@ const PacketDetail = ({ packet, onClose }) => {
     </div>
   );
 
-  // Render all events
-  const renderEvents = () => (
-    <div className="detail-section">
-      <h4>All Events ({packet.important_events?.length || 0})</h4>
-      <div className="events-list">
-        {packet.important_events && packet.important_events.length > 0 ? (
-          packet.important_events.map((event, idx) => (
-            <div key={idx} className={`event-item event-${event.trace_type}`}>
-              <div className="event-header">
-                <span className="event-type badge">{event.trace_type}</span>
-                <span className="event-time">{formatTimestamp(event.timestamp)}</span>
-              </div>
-              <div className="event-details">
+  // Render all events with comprehensive details
+  const renderEvents = () => {
+    // Sort events by timestamp to ensure chronological order
+    const sortedEvents = packet.important_events
+      ? [...packet.important_events].sort((a, b) => a.timestamp - b.timestamp)
+      : [];
+
+    return (
+      <div className="detail-section">
+        <h4>All Events ({sortedEvents.length})</h4>
+        <div className="events-description">
+          Showing all events in chronological order with complete information.
+          Null/zero values are displayed for debugging purposes.
+        </div>
+        <div className="events-list-detailed">
+          {sortedEvents.length > 0 ? (
+            sortedEvents.map((event, idx) => (
+              <div key={idx} className={`event-item-detailed event-${event.trace_type}`}>
+                {/* Event Header */}
+                <div className="event-header-detailed">
+                  <div className="event-index">#{idx + 1}</div>
+                  <span className={`event-type-badge badge-${event.trace_type}`}>
+                    {event.trace_type}
+                  </span>
+                  <span className="event-timestamp">{formatTimestamp(event.timestamp)}</span>
+                  <span className="event-cpu">CPU {event.cpu_id ?? 'N/A'}</span>
+                </div>
+
+                {/* Common Event Information */}
+                <div className="event-section">
+                  <h5>Process Information</h5>
+                  <div className="event-info-grid">
+                    <div className="info-field">
+                      <label>PID:</label>
+                      <span className="mono">{event.pid ?? 'N/A'}</span>
+                    </div>
+                    <div className="info-field">
+                      <label>CPU ID:</label>
+                      <span className="mono">{event.cpu_id ?? 'N/A'}</span>
+                    </div>
+                    <div className="info-field">
+                      <label>Comm:</label>
+                      <span className="mono">{event.comm || 'N/A'}</span>
+                    </div>
+                    <div className="info-field">
+                      <label>Timestamp:</label>
+                      <span className="mono">{event.timestamp ?? 'N/A'} ns</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Function Call Specific Information */}
                 {event.trace_type === 'function_call' && (
-                  <>
-                    <span><strong>Function:</strong> {event.function}</span>
-                    <span><strong>CPU:</strong> {event.cpu_id}</span>
-                    <span><strong>Length:</strong> {event.length}</span>
-                    {event.comm && <span><strong>Comm:</strong> {event.comm}</span>}
-                  </>
+                  <div className="event-section">
+                    <h5>Function Call Details</h5>
+                    <div className="event-info-grid">
+                      <div className="info-field full-width">
+                        <label>Function Name:</label>
+                        <span className="mono highlight">{event.function || 'N/A'}</span>
+                      </div>
+                      <div className="info-field">
+                        <label>Packet Length:</label>
+                        <span>{event.length ?? 'N/A'} bytes</span>
+                      </div>
+                      {event.func_ip && (
+                        <div className="info-field">
+                          <label>Function IP:</label>
+                          <span className="mono">{formatAddress(event.func_ip)}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 )}
-                {event.trace_type === 'chain_exit' && (
-                  <>
-                    <span><strong>Verdict:</strong> {event.verdict_str}</span>
-                    <span><strong>Chain:</strong> {event.chain_name}</span>
-                    {event.table_name && <span><strong>Table:</strong> {event.table_name}</span>}
-                    {event.hook_name && <span><strong>Hook:</strong> {event.hook_name}</span>}
-                  </>
+
+                {/* NFT Chain Information (for chain_exit, rule_eval) */}
+                {(event.trace_type === 'chain_exit' || event.trace_type === 'rule_eval') && (
+                  <div className="event-section">
+                    <h5>Chain Information</h5>
+                    <div className="event-info-grid">
+                      <div className="info-field">
+                        <label>Chain Address:</label>
+                        <span className="mono" title={event.chain_addr}>
+                          {formatAddress(event.chain_addr)}
+                        </span>
+                      </div>
+                      <div className="info-field">
+                        <label>Chain Depth:</label>
+                        <span>{event.chain_depth ?? 'N/A'}</span>
+                      </div>
+                      <div className="info-field">
+                        <label>Hook:</label>
+                        <span className="badge hook">{formatHookName(event.hook)}</span>
+                      </div>
+                      <div className="info-field">
+                        <label>Protocol Family:</label>
+                        <span>{formatProtocolFamily(event.pf)}</span>
+                      </div>
+                      {event.chain_name && (
+                        <div className="info-field">
+                          <label>Chain Name:</label>
+                          <span className="highlight">{event.chain_name}</span>
+                        </div>
+                      )}
+                      {event.table_name && (
+                        <div className="info-field">
+                          <label>Table Name:</label>
+                          <span className="highlight">{event.table_name}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 )}
-                {event.trace_type === 'hook_exit' && (
-                  <>
-                    <span><strong>Verdict:</strong> {event.verdict_str}</span>
-                    <span><strong>Hook:</strong> {event.hook_name}</span>
-                  </>
-                )}
+
+                {/* NFT Rule Information (for rule_eval) */}
                 {event.trace_type === 'rule_eval' && (
-                  <>
-                    <span><strong>Rule ID:</strong> {event.rule_id}</span>
-                    {event.verdict_str && <span><strong>Verdict:</strong> {event.verdict_str}</span>}
-                  </>
+                  <div className="event-section">
+                    <h5>Rule Evaluation Details</h5>
+                    <div className="event-info-grid">
+                      <div className="info-field">
+                        <label>Rule Sequence:</label>
+                        <span className="mono">{event.rule_seq ?? 0}</span>
+                      </div>
+                      <div className="info-field">
+                        <label>Rule Handle:</label>
+                        <span className="mono">{event.rule_handle ?? 0}</span>
+                      </div>
+                      <div className="info-field">
+                        <label>Expression Address:</label>
+                        <span className="mono" title={event.expr_addr}>
+                          {formatAddress(event.expr_addr)}
+                        </span>
+                      </div>
+                      <div className="info-field">
+                        <label>Registers Address:</label>
+                        <span className="mono" title={event.regs_addr}>
+                          {formatAddress(event.regs_addr)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
                 )}
+
+                {/* Verdict Information (for chain_exit, rule_eval, hook_exit) */}
+                {(event.trace_type === 'chain_exit' || event.trace_type === 'rule_eval' || event.trace_type === 'hook_exit') && (
+                  <div className="event-section">
+                    <h5>Verdict Information</h5>
+                    <div className="event-info-grid">
+                      <div className="info-field">
+                        <label>Verdict:</label>
+                        <span className={`badge verdict verdict-${event.verdict?.toLowerCase()}`}>
+                          {event.verdict || 'N/A'}
+                        </span>
+                      </div>
+                      <div className="info-field">
+                        <label>Verdict Code:</label>
+                        <span className="mono">{event.verdict_code ?? 'N/A'}</span>
+                      </div>
+                      <div className="info-field">
+                        <label>Verdict Raw:</label>
+                        <span className="mono">{event.verdict_raw ?? 'N/A'}</span>
+                      </div>
+                      {/* Queue information if verdict is QUEUE */}
+                      {(event.verdict === 'QUEUE' || event.verdict_code === 3) && (
+                        <>
+                          <div className="info-field">
+                            <label>Queue Number:</label>
+                            <span className="mono">{event.queue_num ?? 'N/A'}</span>
+                          </div>
+                          <div className="info-field">
+                            <label>Queue Bypass:</label>
+                            <span>{event.has_queue_bypass ? 'Yes' : 'No'}</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Hook Exit Specific Information */}
+                {event.trace_type === 'hook_exit' && (
+                  <div className="event-section">
+                    <h5>Hook Exit Details</h5>
+                    <div className="event-info-grid">
+                      <div className="info-field">
+                        <label>Hook:</label>
+                        <span className="badge hook">{formatHookName(event.hook)}</span>
+                      </div>
+                      <div className="info-field">
+                        <label>Protocol Family:</label>
+                        <span>{formatProtocolFamily(event.pf)}</span>
+                      </div>
+                      {event.hook_name && (
+                        <div className="info-field">
+                          <label>Hook Name:</label>
+                          <span>{event.hook_name}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Packet Information (if available in event) */}
+                {(event.src_ip || event.dst_ip || packet.src_ip || packet.dst_ip) && (
+                  <div className="event-section">
+                    <h5>Packet Information (at this event)</h5>
+                    <div className="event-info-grid">
+                      <div className="info-field">
+                        <label>SKB Address:</label>
+                        <span className="mono" title={packet.skb_addr}>
+                          {formatAddress(packet.skb_addr)}
+                        </span>
+                      </div>
+                      <div className="info-field">
+                        <label>Protocol:</label>
+                        <span className="badge protocol">{packet.protocol_name || 'N/A'}</span>
+                      </div>
+                      <div className="info-field">
+                        <label>Source:</label>
+                        <span className="mono">
+                          {event.src_ip || packet.src_ip || 'N/A'}
+                          {(event.src_port || packet.src_port) ? `:${event.src_port || packet.src_port}` : ''}
+                        </span>
+                      </div>
+                      <div className="info-field">
+                        <label>Destination:</label>
+                        <span className="mono">
+                          {event.dst_ip || packet.dst_ip || 'N/A'}
+                          {(event.dst_port || packet.dst_port) ? `:${event.dst_port || packet.dst_port}` : ''}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Raw Event Data (for debugging) */}
+                <details className="event-raw-data">
+                  <summary>Show Raw Event Data (for debugging)</summary>
+                  <pre className="raw-json">{JSON.stringify(event, null, 2)}</pre>
+                </details>
               </div>
-            </div>
-          ))
-        ) : (
-          <p className="no-data">No events recorded</p>
-        )}
+            ))
+          ) : (
+            <p className="no-data">No events recorded</p>
+          )}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="packet-detail">
