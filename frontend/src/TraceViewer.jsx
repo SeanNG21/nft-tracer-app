@@ -22,6 +22,8 @@ const TraceViewer = ({ filename }) => {
     skb: '',
     hook: '',
     verdict: '',
+    any_verdict: '',
+    had_verdict_change: false,
     function: '',
     keyword: ''
   });
@@ -82,6 +84,8 @@ const TraceViewer = ({ filename }) => {
       skb: '',
       hook: '',
       verdict: '',
+      any_verdict: '',
+      had_verdict_change: false,
       function: '',
       keyword: ''
     });
