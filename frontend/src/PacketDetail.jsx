@@ -270,8 +270,22 @@ const PacketDetail = ({ packet, onClose }) => {
                 )}
                 {event.trace_type === 'rule_eval' && (
                   <>
-                    <span><strong>Rule ID:</strong> {event.rule_id}</span>
-                    {event.verdict_str && <span><strong>Verdict:</strong> {event.verdict_str}</span>}
+                    <span><strong>Rule Sequence:</strong> {event.rule_seq}</span>
+                    <span><strong>Rule Handle:</strong> {event.rule_handle ? `0x${event.rule_handle.toString(16)}` : 'N/A'}</span>
+                    {event.rule_text && (
+                      <span className="rule-text-container">
+                        <strong>Rule:</strong>
+                        <code className="rule-text">{event.rule_text}</code>
+                      </span>
+                    )}
+                    {!event.rule_text && event.rule_handle > 0 && (
+                      <span className="rule-text-unavailable">
+                        <em>(Rule text unavailable - nft command not found)</em>
+                      </span>
+                    )}
+                    {event.expr_addr && <span><strong>Expression Address:</strong> {event.expr_addr}</span>}
+                    {event.verdict && <span><strong>Verdict:</strong> {event.verdict}</span>}
+                    {event.chain_depth !== undefined && <span><strong>Chain Depth:</strong> {event.chain_depth}</span>}
                   </>
                 )}
               </div>

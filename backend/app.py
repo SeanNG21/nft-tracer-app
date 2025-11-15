@@ -12,6 +12,7 @@ import time
 import threading
 import socket
 import platform
+import subprocess
 from datetime import datetime
 from collections import defaultdict
 from typing import Dict, List, Optional
@@ -157,6 +158,90 @@ class KallsymsLookup:
 kallsyms = KallsymsLookup()
 
 # ============================================================================
+# NFT RULE CACHE - Fetch rule text from nft command
+# ============================================================================
+class NFTRuleCache:
+    """Cache and lookup nft rules by handle"""
+
+    def __init__(self):
+        self.rules_cache = {}  # handle -> rule_text
+        self.nft_available = None
+        self.last_refresh = 0
+        self.cache_ttl = 60  # Refresh cache every 60 seconds
+
+    def _check_nft_available(self):
+        """Check if nft command is available"""
+        if self.nft_available is not None:
+            return self.nft_available
+
+        try:
+            result = subprocess.run(['which', 'nft'], capture_output=True, timeout=1)
+            self.nft_available = result.returncode == 0
+        except Exception:
+            self.nft_available = False
+
+        return self.nft_available
+
+    def _refresh_rules_cache(self):
+        """Fetch all rules from nft and cache them"""
+        if not self._check_nft_available():
+            return
+
+        current_time = time.time()
+        if current_time - self.last_refresh < self.cache_ttl and self.rules_cache:
+            return  # Cache still valid
+
+        try:
+            # Run nft --handle --numeric list ruleset
+            result = subprocess.run(
+                ['nft', '--handle', '--numeric', 'list', 'ruleset'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+
+            if result.returncode != 0:
+                return
+
+            # Parse output to extract rules with handles
+            self.rules_cache = {}
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                # Look for lines with "# handle <number>"
+                if '# handle ' in line:
+                    try:
+                        # Extract handle number
+                        handle_part = line.split('# handle ')[-1]
+                        handle = int(handle_part.strip())
+
+                        # Extract rule text (everything before "# handle")
+                        rule_text = line.split('# handle ')[0].strip()
+
+                        self.rules_cache[handle] = rule_text
+                    except (ValueError, IndexError):
+                        continue
+
+            self.last_refresh = current_time
+
+        except Exception as e:
+            print(f"[!] Failed to refresh nft rules cache: {e}")
+
+    def get_rule_text(self, rule_handle):
+        """Get rule text by handle"""
+        if rule_handle is None or rule_handle == 0:
+            return None
+
+        if not self._check_nft_available():
+            return None
+
+        # Refresh cache if needed
+        self._refresh_rules_cache()
+
+        return self.rules_cache.get(rule_handle)
+
+nft_cache = NFTRuleCache()
+
+# ============================================================================
 # DATA STRUCTURES
 # ============================================================================
 @dataclass
@@ -298,6 +383,11 @@ class PacketTrace:
 
             self._last_expr_eval = (dedup_key, event.timestamp)
 
+        # Fetch rule text from nft if available
+        rule_text = None
+        if event.rule_handle and event.rule_handle > 0:
+            rule_text = nft_cache.get_rule_text(event.rule_handle)
+
         event_dict = {
             'timestamp': event.timestamp,
             'trace_type': self._trace_type_str(event.trace_type),
@@ -306,6 +396,7 @@ class PacketTrace:
             'verdict_raw': event.verdict_raw,  # FIX: Include raw verdict for debugging
             'rule_seq': event.rule_seq,
             'rule_handle': event.rule_handle,  # FIX: Always include, even if 0
+            'rule_text': rule_text,  # Full rule text from nft command
             'expr_addr': hex(event.expr_addr) if event.expr_addr > 0 else None,  # FIX: Add expr_addr
             'chain_addr': hex(event.chain_addr) if event.chain_addr > 0 else None,  # FIX: Add chain_addr
             'chain_depth': event.chain_depth, 'cpu_id': event.cpu_id,
