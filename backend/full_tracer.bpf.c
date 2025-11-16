@@ -53,6 +53,11 @@ struct trace_event {
     u64 func_ip;  // NEW: Function instruction pointer for name lookup
     char function_name[64];
     char comm[16];
+
+    // Rule metadata (from kernel)
+    char chain_name[32];
+    char table_name[32];
+    char rule_comment[64];
 };
 
 // Maps
@@ -86,12 +91,96 @@ static __always_inline void read_comm_safe(char *dest, u32 size)
     for (int i = 0; i < 16 && i < size; i++) {
         dest[i] = 0;
     }
-    
+
     long ret = bpf_get_current_comm(dest, size);
     if (ret != 0) {
         dest[0] = '?';
         dest[1] = 0;
     }
+}
+
+// Helper: Extract chain name from nft_chain struct
+static __always_inline void extract_chain_name(void *chain, char *name_buf, u32 buf_size)
+{
+    #pragma unroll
+    for (int i = 0; i < 32 && i < buf_size; i++) {
+        name_buf[i] = 0;
+    }
+
+    if (!chain)
+        return;
+
+    s32 name_offsets[] = {48, 56, 64, 72, 40};
+
+    #pragma unroll
+    for (int i = 0; i < 5; i++) {
+        char temp_name[32] = {};
+
+        if (bpf_probe_read_kernel(&temp_name, sizeof(temp_name),
+                                   (char *)chain + name_offsets[i]) == 0) {
+            if (temp_name[0] >= 32 && temp_name[0] <= 126) {
+                #pragma unroll
+                for (int j = 0; j < 31 && j < buf_size - 1; j++) {
+                    name_buf[j] = temp_name[j];
+                    if (temp_name[j] == 0)
+                        break;
+                }
+                return;
+            }
+        }
+    }
+}
+
+// Helper: Extract table name from nft_table struct
+static __always_inline void extract_table_name(void *chain, char *name_buf, u32 buf_size)
+{
+    #pragma unroll
+    for (int i = 0; i < 32 && i < buf_size; i++) {
+        name_buf[i] = 0;
+    }
+
+    if (!chain)
+        return;
+
+    s32 table_ptr_offsets[] = {32, 40, 48, 24};
+
+    #pragma unroll
+    for (int i = 0; i < 4; i++) {
+        void *table = NULL;
+
+        if (bpf_probe_read_kernel(&table, sizeof(table),
+                                   (char *)chain + table_ptr_offsets[i]) == 0 && table) {
+            s32 name_offsets[] = {16, 24, 32, 40};
+
+            #pragma unroll
+            for (int j = 0; j < 4; j++) {
+                char temp_name[32] = {};
+
+                if (bpf_probe_read_kernel(&temp_name, sizeof(temp_name),
+                                           (char *)table + name_offsets[j]) == 0) {
+                    if (temp_name[0] >= 32 && temp_name[0] <= 126) {
+                        #pragma unroll
+                        for (int k = 0; k < 31 && k < buf_size - 1; k++) {
+                            name_buf[k] = temp_name[k];
+                            if (temp_name[k] == 0)
+                                break;
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Helper: Extract rule comment/userdata
+static __always_inline void extract_rule_comment(void *expr, char *comment_buf, u32 buf_size)
+{
+    #pragma unroll
+    for (int i = 0; i < 64 && i < buf_size; i++) {
+        comment_buf[i] = 0;
+    }
+    // Userdata extraction is complex, leave empty for now
 }
 
 // Helper: extract rule handle
@@ -251,10 +340,14 @@ int kprobe__nft_do_chain(struct pt_regs *ctx)
     evt.event_type = EVENT_TYPE_NFT_CHAIN;
     evt.chain_addr = (u64)priv;
     evt.chain_depth = depth;
-    
+
     extract_packet_info_from_pkt(pkt, &evt);
     read_comm_safe(evt.comm, sizeof(evt.comm));
-    
+
+    // NEW: Extract chain and table names
+    extract_chain_name(priv, evt.chain_name, sizeof(evt.chain_name));
+    extract_table_name(priv, evt.table_name, sizeof(evt.table_name));
+
     // Store with TID as key for kretprobe to retrieve
     if (evt.skb_addr != 0) {
         skb_info_map.update(&tid, &evt);
@@ -297,6 +390,13 @@ int kretprobe__nft_do_chain(struct pt_regs *ctx)
         evt.src_port = stored->src_port;
         evt.dst_port = stored->dst_port;
         evt.length = stored->length;
+
+        // NEW: Copy chain and table names
+        #pragma unroll
+        for (int i = 0; i < 31; i++) {
+            evt.chain_name[i] = stored->chain_name[i];
+            evt.table_name[i] = stored->table_name[i];
+        }
     }
 
     if (verdict == 3u) {
@@ -360,7 +460,17 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
     evt.src_port = stored->src_port;
     evt.dst_port = stored->dst_port;
     evt.length = stored->length;
-    
+
+    // NEW: Copy chain and table names from stored info
+    #pragma unroll
+    for (int i = 0; i < 31; i++) {
+        evt.chain_name[i] = stored->chain_name[i];
+        evt.table_name[i] = stored->table_name[i];
+    }
+
+    // NEW: Try to extract rule comment
+    extract_rule_comment(expr, evt.rule_comment, sizeof(evt.rule_comment));
+
     evt.verdict_raw = verdict_code;
     evt.verdict = decode_verdict(verdict_code, (u32)verdict_code);
 

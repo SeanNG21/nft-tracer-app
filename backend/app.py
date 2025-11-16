@@ -185,7 +185,10 @@ class NFTEvent:
     dst_port: int
     rule_handle: int
     comm: str
-    
+    chain_name: str = ""  # NEW: Chain name from kernel
+    table_name: str = ""  # NEW: Table name from kernel
+    rule_comment: str = ""  # NEW: Rule comment/userdata
+
     @staticmethod
     def from_bpf_event(event):
         return NFTEvent(
@@ -200,7 +203,10 @@ class NFTEvent:
             src_ip=event.src_ip, dst_ip=event.dst_ip,
             src_port=event.src_port, dst_port=event.dst_port,
             rule_handle=event.rule_handle,
-            comm=event.comm.decode('utf-8', errors='ignore')
+            comm=event.comm.decode('utf-8', errors='ignore'),
+            chain_name=event.chain_name.decode('utf-8', errors='ignore').rstrip('\x00'),
+            table_name=event.table_name.decode('utf-8', errors='ignore').rstrip('\x00'),
+            rule_comment=event.rule_comment.decode('utf-8', errors='ignore').rstrip('\x00')
         )
 
 @dataclass
@@ -309,7 +315,10 @@ class PacketTrace:
             'expr_addr': hex(event.expr_addr) if event.expr_addr > 0 else None,  # FIX: Add expr_addr
             'chain_addr': hex(event.chain_addr) if event.chain_addr > 0 else None,  # FIX: Add chain_addr
             'chain_depth': event.chain_depth, 'cpu_id': event.cpu_id,
-            'comm': event.comm, 'hook': event.hook, 'pf': event.pf
+            'comm': event.comm, 'hook': event.hook, 'pf': event.pf,
+            'chain_name': event.chain_name if event.chain_name else None,  # NEW
+            'table_name': event.table_name if event.table_name else None,  # NEW
+            'rule_comment': event.rule_comment if event.rule_comment else None  # NEW
         }
         
         if len(self.events) > 0:
@@ -824,6 +833,9 @@ class TraceSession:
                 ("queue_num", ct.c_ushort), ("has_queue_bypass", ct.c_ubyte),
                 ("func_ip", ct.c_ulonglong), ("function_name", ct.c_char * 64),
                 ("comm", ct.c_char * 16),
+                ("chain_name", ct.c_char * 32),  # NEW
+                ("table_name", ct.c_char * 32),  # NEW
+                ("rule_comment", ct.c_char * 64),  # NEW
             ]
         
         event = ct.cast(data, ct.POINTER(FullEvent)).contents
@@ -891,7 +903,10 @@ class TraceSession:
                     src_ip=event.src_ip, dst_ip=event.dst_ip,
                     src_port=event.src_port, dst_port=event.dst_port,
                     rule_handle=event.rule_handle,
-                    comm=event.comm.decode('utf-8', errors='ignore')
+                    comm=event.comm.decode('utf-8', errors='ignore'),
+                    chain_name=event.chain_name.decode('utf-8', errors='ignore').rstrip('\x00'),
+                    table_name=event.table_name.decode('utf-8', errors='ignore').rstrip('\x00'),
+                    rule_comment=event.rule_comment.decode('utf-8', errors='ignore').rstrip('\x00')
                 )
                 trace.add_nft_event(nft_event)
 
