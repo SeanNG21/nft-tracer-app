@@ -5,7 +5,12 @@ Not getting `rule_eval` events with `trace_type="rule_eval"` and `verdict="CONTI
 
 ## Root Cause Analysis
 
-The code is **working correctly**. The issue is that **you need to generate traffic** that triggers the nftables rules to see `rule_eval` events.
+The code is **working correctly**. The issue is that you need **TWO things**:
+
+1. **Rules loaded in KERNEL** - Real nftables rules processing packets
+2. **Rules cached in FILE** - Rule text enrichment for trace output
+
+AND you need to **generate traffic** that triggers these rules.
 
 ### How it works:
 
@@ -22,14 +27,37 @@ The code is **working correctly**. The issue is that **you need to generate traf
 
 ## Test Steps
 
-### 1. Load the Example Ruleset
+### 1. Setup Test Rules (IMPORTANT: Load into KERNEL)
 
+**Option A: Use setup script (Recommended)**
 ```bash
+sudo bash backend/setup_test_rules.sh
+```
+
+This will:
+- Create nftables table and chains in kernel
+- Add 4 test rules with specific handles (4100-4200)
+- Cache ruleset to `/tmp/nft_ruleset_cache.json`
+
+**Option B: Manual setup**
+```bash
+# Load rules into KERNEL
+sudo nft add table ip filter
+sudo nft add chain ip filter input '{ type filter hook input priority 0; policy accept; }'
+sudo nft add chain ip filter output '{ type filter hook output priority 0; policy accept; }'
+sudo nft add rule ip filter input tcp dport 22 counter accept handle 4100
+sudo nft add rule ip filter input tcp dport 80 counter accept handle 4101
+sudo nft add rule ip filter input icmp type echo-request counter drop handle 4102
+sudo nft add rule ip filter output counter accept handle 4200
+
+# Cache for rule text enrichment
+sudo nft -j list ruleset > /tmp/nft_ruleset_cache.json
 sudo python3 backend/load_example_ruleset.py
 ```
 
 Expected output:
 ```
+✅ Rules successfully loaded into kernel!
 ✓ Successfully loaded 4 rules
   [ip:filter:input#0] handle 4100: tcp dport == 22 counter accept
   [ip:filter:input#1] handle 4101: tcp dport == 80 counter accept
@@ -209,13 +237,30 @@ When a packet hits the INPUT chain with destination port 22:
    - Final verdict from netfilter hook
    - Shows overall decision
 
+## Cleanup After Testing
+
+To remove test rules from kernel:
+
+```bash
+sudo bash backend/cleanup_test_rules.sh
+```
+
+Or manually:
+```bash
+sudo nft delete table ip filter
+sudo rm -f /tmp/nft_ruleset_cache.json
+```
+
 ## Summary
 
 The code is **working correctly**. To see `rule_eval` events:
 
-1. ✅ Load rules with `load_example_ruleset.py`
-2. ✅ Start trace session with mode="nft"
+1. ✅ Load rules into **KERNEL** with `sudo bash backend/setup_test_rules.sh`
+2. ✅ Start backend and create trace session with mode="nft"
 3. ⚠️ **GENERATE TRAFFIC** to trigger rules (this is the missing step!)
 4. ✅ Stop session and check trace file
 
-Without step 3, you will see NO events because no packets are being processed by nftables!
+**Key Points:**
+- Rules must be in KERNEL (not just cache) to trigger `nft_immediate_eval`
+- Cache file is only for enriching rule text in output
+- Without traffic, you will see NO events because no packets are being processed by nftables!
