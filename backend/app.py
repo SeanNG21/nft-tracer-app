@@ -21,6 +21,7 @@ from flask_cors import CORS
 import psutil
 
 from btf_skb_discoverer import BTFSKBDiscoverer
+from nft_ruleset_parser import get_parser as get_nft_parser
 
 try:
     from bcc import BPF
@@ -298,6 +299,25 @@ class PacketTrace:
 
             self._last_expr_eval = (dedup_key, event.timestamp)
 
+        # Enrich event with rule text from rule_handle
+        rule_text = None
+        rule_position = None
+        rule_table = None
+        rule_chain = None
+
+        if event.rule_handle > 0:
+            try:
+                parser = get_nft_parser()
+                rule_info = parser.get_rule_info(event.rule_handle)
+                if rule_info:
+                    rule_text = rule_info.rule_text
+                    rule_position = rule_info.position
+                    rule_table = rule_info.table
+                    rule_chain = rule_info.chain
+            except Exception as e:
+                # Silent fail - don't break on parser errors
+                pass
+
         event_dict = {
             'timestamp': event.timestamp,
             'trace_type': self._trace_type_str(event.trace_type),
@@ -306,6 +326,10 @@ class PacketTrace:
             'verdict_raw': event.verdict_raw,  # FIX: Include raw verdict for debugging
             'rule_seq': event.rule_seq,
             'rule_handle': event.rule_handle,  # FIX: Always include, even if 0
+            'rule_text': rule_text,  # NEW: Rule text from nft ruleset
+            'rule_position': rule_position,  # NEW: Actual position in chain (0-indexed)
+            'rule_table': rule_table,  # NEW: Table name
+            'rule_chain': rule_chain,  # NEW: Chain name
             'expr_addr': hex(event.expr_addr) if event.expr_addr > 0 else None,  # FIX: Add expr_addr
             'chain_addr': hex(event.chain_addr) if event.chain_addr > 0 else None,  # FIX: Add chain_addr
             'chain_depth': event.chain_depth, 'cpu_id': event.cpu_id,
@@ -512,7 +536,7 @@ int trace_skb_func(struct pt_regs *ctx, struct sk_buff *skb) {
 class TraceSession:
     """Manages trace session - supports nft, universal, full modes"""
     
-    def __init__(self, session_id: str, mode: str = "nft", pcap_filter: str = "", 
+    def __init__(self, session_id: str, mode: str = "nft", pcap_filter: str = "",
                  max_functions: int = 30):
         self.session_id = session_id
         self.mode = mode
@@ -525,29 +549,37 @@ class TraceSession:
         self.bpf_universal = None
         self.bpf_full = None
         self.thread = None
-        
+
         self.packet_traces: Dict[int, PacketTrace] = {}
         self.completed_traces: List[PacketTrace] = []
         self.lock = threading.Lock()
-        
+
         self.total_events = 0
         self.events_per_second = 0
         self.last_stats_time = time.time()
         self.last_event_count = 0
-        
+
         self.hostname = socket.gethostname()
         self.kernel_version = platform.release()
         self.cpu_count = psutil.cpu_count()
-        
+
         self.synthetic_id_counter = -1
         self.skb_zero_count = 0
-        
+
         self.functions = []
         self.func_id_to_name = {}
         self.events_by_func = defaultdict(int)
-        
+
         self.trace_timeout_ns = 5 * 1_000_000_000
-        
+
+        # Refresh nft ruleset parser to get latest rules
+        try:
+            parser = get_nft_parser()
+            num_rules = parser.refresh()
+            print(f"[DEBUG] Loaded {num_rules} nftables rules for session")
+        except Exception as e:
+            print(f"[WARNING] Failed to load nft rules: {e}")
+
         print(f"[DEBUG] Session {session_id} created in {mode.upper()} mode")
     
     def start(self) -> bool:
@@ -1457,6 +1489,76 @@ def get_packet_detail(filename, packet_index):
         return jsonify({'error': 'Packet not found'}), 404
 
     return jsonify(packet_detail)
+
+@app.route('/api/nft/rules', methods=['GET'])
+def get_nft_rules():
+    """Get all nftables rules with handles for debugging rule_seq issues"""
+    try:
+        parser = get_nft_parser()
+        parser.refresh()  # Refresh to get latest rules
+
+        # Get filter parameters
+        family = request.args.get('family')
+        table = request.args.get('table')
+        chain = request.args.get('chain')
+
+        rules_list = []
+
+        if family and table and chain:
+            # Get rules for specific chain
+            rules = parser.get_rules_by_chain(family, table, chain)
+            for rule in rules:
+                rules_list.append({
+                    'handle': rule.handle,
+                    'family': rule.family,
+                    'table': rule.table,
+                    'chain': rule.chain,
+                    'position': rule.position,
+                    'rule_text': rule.rule_text
+                })
+        else:
+            # Get all rules
+            for handle, rule in sorted(parser.rules.items()):
+                rules_list.append({
+                    'handle': rule.handle,
+                    'family': rule.family,
+                    'table': rule.table,
+                    'chain': rule.chain,
+                    'position': rule.position,
+                    'rule_text': rule.rule_text
+                })
+
+        return jsonify({
+            'total': len(rules_list),
+            'rules': rules_list,
+            'usage': 'Compare rule_handle from trace events with this list to debug rule_seq issues'
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/nft/rules/<int:handle>', methods=['GET'])
+def get_nft_rule_by_handle(handle):
+    """Get specific rule info by handle"""
+    try:
+        parser = get_nft_parser()
+        rule = parser.get_rule_info(handle)
+
+        if not rule:
+            return jsonify({'error': f'Rule with handle {handle} not found'}), 404
+
+        return jsonify({
+            'handle': rule.handle,
+            'family': rule.family,
+            'table': rule.table,
+            'chain': rule.chain,
+            'position': rule.position,
+            'rule_text': rule.rule_text,
+            'note': f'This is rule #{rule.position} (0-indexed) in chain {rule.family}:{rule.table}:{rule.chain}'
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 # ============================================================================
 # MAIN
