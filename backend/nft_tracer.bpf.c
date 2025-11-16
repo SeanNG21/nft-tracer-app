@@ -95,7 +95,7 @@ static __always_inline void read_comm_safe(char *dest, u32 size)
 
 // Helper: Extract chain name from nft_chain struct
 // The chain_addr (priv) points to struct nft_chain
-// Typical offsets for chain name: 48-64 bytes (varies by kernel version)
+// Typical offsets for chain name: 40-96 bytes (varies by kernel version)
 static __always_inline void extract_chain_name(void *chain, char *name_buf, u32 buf_size)
 {
     // Initialize buffer
@@ -107,33 +107,54 @@ static __always_inline void extract_chain_name(void *chain, char *name_buf, u32 
     if (!chain)
         return;
 
-    // Try common offsets for chain name in nft_chain struct
-    // Kernel 5.x-6.x: typically at offset 48, 56, or 64
-    s32 name_offsets[] = {48, 56, 64, 72, 40};
+    // Extended offsets to try (more comprehensive)
+    // Common: 40, 48, 56, 64, 72, 80, 88, 96
+    s32 name_offsets[] = {40, 48, 56, 64, 72, 80, 88, 96, 32, 104};
 
     #pragma unroll
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 10; i++) {
         char temp_name[32] = {};
 
         if (bpf_probe_read_kernel(&temp_name, sizeof(temp_name),
                                    (char *)chain + name_offsets[i]) == 0) {
-            // Check if this looks like a valid string (printable ASCII)
-            if (temp_name[0] >= 32 && temp_name[0] <= 126) {
-                // Copy to output
+            // Stronger validation:
+            // 1. First char is printable ASCII (not special chars)
+            // 2. String length is reasonable (2-31 chars)
+            // 3. All chars are alphanumeric or common symbols
+            if (temp_name[0] >= 'A' && temp_name[0] <= 'z') {
+                int valid_len = 0;
                 #pragma unroll
-                for (int j = 0; j < 31 && j < buf_size - 1; j++) {
-                    name_buf[j] = temp_name[j];
-                    if (temp_name[j] == 0)
+                for (int k = 0; k < 31; k++) {
+                    if (temp_name[k] == 0)
                         break;
+                    // Allow alphanumeric, underscore, dash
+                    if (!((temp_name[k] >= 'a' && temp_name[k] <= 'z') ||
+                          (temp_name[k] >= 'A' && temp_name[k] <= 'Z') ||
+                          (temp_name[k] >= '0' && temp_name[k] <= '9') ||
+                          temp_name[k] == '_' || temp_name[k] == '-')) {
+                        valid_len = -1;
+                        break;
+                    }
+                    valid_len++;
                 }
-                return;
+
+                // Accept if we found a valid name (2-31 chars)
+                if (valid_len >= 2) {
+                    #pragma unroll
+                    for (int j = 0; j < 31 && j < buf_size - 1; j++) {
+                        name_buf[j] = temp_name[j];
+                        if (temp_name[j] == 0)
+                            break;
+                    }
+                    return;
+                }
             }
         }
     }
 }
 
 // Helper: Extract table name from nft_table struct
-// Need to get table pointer from chain first (offset ~32-40)
+// Need to get table pointer from chain first (offset ~16-56)
 static __always_inline void extract_table_name(void *chain, char *name_buf, u32 buf_size)
 {
     // Initialize buffer
@@ -146,34 +167,57 @@ static __always_inline void extract_table_name(void *chain, char *name_buf, u32 
         return;
 
     // Try to find table pointer in nft_chain struct
-    // Typically at offset 32, 40, or 48
-    s32 table_ptr_offsets[] = {32, 40, 48, 24};
+    // Extended offsets: 16, 24, 32, 40, 48, 56
+    s32 table_ptr_offsets[] = {16, 24, 32, 40, 48, 56, 8, 64};
 
     #pragma unroll
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 8; i++) {
         void *table = NULL;
 
         if (bpf_probe_read_kernel(&table, sizeof(table),
                                    (char *)chain + table_ptr_offsets[i]) == 0 && table) {
+            // Validate table pointer (should be kernel address)
+            if ((u64)table < 0xffff000000000000ULL)
+                continue;
+
             // Now try to read table name from nft_table struct
-            // Table name typically at offset 16, 24, 32, or 40
-            s32 name_offsets[] = {16, 24, 32, 40};
+            // Extended offsets: 8, 16, 24, 32, 40, 48
+            s32 name_offsets[] = {8, 16, 24, 32, 40, 48, 56, 64};
 
             #pragma unroll
-            for (int j = 0; j < 4; j++) {
+            for (int j = 0; j < 8; j++) {
                 char temp_name[32] = {};
 
                 if (bpf_probe_read_kernel(&temp_name, sizeof(temp_name),
                                            (char *)table + name_offsets[j]) == 0) {
-                    // Check if this looks like a valid string
-                    if (temp_name[0] >= 32 && temp_name[0] <= 126) {
+                    // Stronger validation
+                    if (temp_name[0] >= 'A' && temp_name[0] <= 'z') {
+                        int valid_len = 0;
                         #pragma unroll
-                        for (int k = 0; k < 31 && k < buf_size - 1; k++) {
-                            name_buf[k] = temp_name[k];
+                        for (int k = 0; k < 31; k++) {
                             if (temp_name[k] == 0)
                                 break;
+                            // Allow alphanumeric, underscore, dash
+                            if (!((temp_name[k] >= 'a' && temp_name[k] <= 'z') ||
+                                  (temp_name[k] >= 'A' && temp_name[k] <= 'Z') ||
+                                  (temp_name[k] >= '0' && temp_name[k] <= '9') ||
+                                  temp_name[k] == '_' || temp_name[k] == '-')) {
+                                valid_len = -1;
+                                break;
+                            }
+                            valid_len++;
                         }
-                        return;
+
+                        // Accept if valid (2-31 chars)
+                        if (valid_len >= 2) {
+                            #pragma unroll
+                            for (int m = 0; m < 31 && m < buf_size - 1; m++) {
+                                name_buf[m] = temp_name[m];
+                                if (temp_name[m] == 0)
+                                    break;
+                            }
+                            return;
+                        }
                     }
                 }
             }
