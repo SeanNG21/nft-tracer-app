@@ -1560,6 +1560,81 @@ def get_nft_rule_by_handle(handle):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/nft/upload', methods=['POST'])
+def upload_nft_ruleset():
+    """
+    Upload nftables ruleset JSON for parsing
+
+    This is needed when running in container where 'nft' command is not available.
+
+    Usage:
+    1. On host system, run: nft -j list ruleset > ruleset.json
+    2. POST the JSON content to this endpoint
+
+    Body can be either:
+    - JSON object: {"nftables": [...]}
+    - Plain JSON string
+    """
+    try:
+        # Get JSON data from request
+        if request.is_json:
+            # If Content-Type is application/json
+            json_data = request.get_json()
+            if isinstance(json_data, dict):
+                # Convert back to string for parser
+                json_str = json.dumps(json_data)
+            else:
+                json_str = str(json_data)
+        else:
+            # If sent as text/plain
+            json_str = request.get_data(as_text=True)
+
+        # Validate it's valid JSON
+        try:
+            json.loads(json_str)
+        except json.JSONDecodeError as e:
+            return jsonify({'error': f'Invalid JSON: {e}'}), 400
+
+        # Load into parser
+        parser = get_nft_parser()
+        num_rules = parser.load_from_json_string(json_str)
+
+        return jsonify({
+            'success': True,
+            'rules_loaded': num_rules,
+            'message': f'Successfully loaded {num_rules} rules from uploaded ruleset',
+            'note': 'Rules are now cached and will be used for enriching trace events'
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/nft/status', methods=['GET'])
+def get_nft_parser_status():
+    """Get status of NFT parser - whether nft command is available, cache status, etc."""
+    try:
+        parser = get_nft_parser()
+
+        # Check if nft command is available
+        nft_available = parser._check_nft_command()
+
+        # Check cache file
+        cache_exists = os.path.exists(parser.cache_file)
+        cache_size = os.path.getsize(parser.cache_file) if cache_exists else 0
+
+        return jsonify({
+            'nft_command_available': nft_available,
+            'cache_file': parser.cache_file,
+            'cache_exists': cache_exists,
+            'cache_size_bytes': cache_size,
+            'rules_loaded': len(parser.rules),
+            'last_update': parser._last_update,
+            'note': 'If nft command is not available and cache is empty, upload ruleset via POST /api/nft/upload'
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 # ============================================================================
 # MAIN
 # ============================================================================

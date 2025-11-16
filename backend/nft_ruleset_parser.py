@@ -6,6 +6,7 @@ This module parses nftables ruleset and creates a mapping between
 rule handles and their corresponding rule text for enriching trace events.
 """
 
+import os
 import subprocess
 import json
 import re
@@ -30,38 +31,67 @@ class RuleInfo:
 class NFTRulesetParser:
     """Parser for nftables ruleset to extract rule handle -> text mappings"""
 
-    def __init__(self):
+    def __init__(self, cache_file: str = '/tmp/nft_ruleset_cache.json'):
         self.rules: Dict[int, RuleInfo] = {}
         self._last_update = 0
+        self.cache_file = cache_file
+        self._nft_available = None
+
+    def _check_nft_command(self) -> bool:
+        """Check if nft command is available"""
+        if self._nft_available is not None:
+            return self._nft_available
+
+        try:
+            result = subprocess.run(
+                ['nft', '--version'],
+                capture_output=True,
+                timeout=2
+            )
+            self._nft_available = (result.returncode == 0)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            self._nft_available = False
+
+        return self._nft_available
 
     def parse_ruleset(self) -> Dict[int, RuleInfo]:
         """
         Parse nftables ruleset and return mapping of handle -> RuleInfo
 
+        Priority:
+        1. Try nft command (if available)
+        2. Fallback to cached JSON file (from API upload or previous run)
+        3. Return empty dict with warning
+
         Returns:
             Dict mapping rule_handle to RuleInfo objects
         """
-        try:
-            # Try JSON format first (more reliable)
-            result = subprocess.run(
-                ['nft', '-j', 'list', 'ruleset'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
+        # Try nft command first (if available)
+        if self._check_nft_command():
+            try:
+                result = subprocess.run(
+                    ['nft', '-j', 'list', 'ruleset'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
 
-            if result.returncode == 0:
-                return self._parse_json_ruleset(result.stdout)
-            else:
-                # Fallback to text format with handles
-                return self._parse_text_ruleset()
+                if result.returncode == 0:
+                    rules = self._parse_json_ruleset(result.stdout)
+                    # Cache the result
+                    self._save_to_cache(result.stdout)
+                    return rules
+                else:
+                    # Try text format
+                    return self._parse_text_ruleset()
 
-        except subprocess.TimeoutExpired:
-            print("Warning: nft command timed out")
-            return {}
-        except Exception as e:
-            print(f"Error parsing ruleset: {e}")
-            return {}
+            except subprocess.TimeoutExpired:
+                print("Warning: nft command timed out, trying cache...")
+            except Exception as e:
+                print(f"Error running nft command: {e}, trying cache...")
+
+        # Fallback to cached file
+        return self._load_from_cache()
 
     def _parse_json_ruleset(self, json_output: str) -> Dict[int, RuleInfo]:
         """Parse JSON format ruleset"""
@@ -235,6 +265,80 @@ class NFTRulesetParser:
             print(f"Error in text parsing: {e}")
 
         return rules
+
+    def _save_to_cache(self, json_output: str):
+        """Save nft JSON output to cache file"""
+        try:
+            with open(self.cache_file, 'w') as f:
+                f.write(json_output)
+            print(f"[NFT Parser] Cached ruleset to {self.cache_file}")
+        except Exception as e:
+            print(f"[NFT Parser] Warning: Failed to save cache: {e}")
+
+    def _load_from_cache(self) -> Dict[int, RuleInfo]:
+        """Load ruleset from cached JSON file"""
+        if not os.path.exists(self.cache_file):
+            print(f"[NFT Parser] WARNING: nft command not available and no cache found!")
+            print(f"[NFT Parser] To enable rule text enrichment:")
+            print(f"[NFT Parser]   1. Run on host: nft -j list ruleset > ruleset.json")
+            print(f"[NFT Parser]   2. POST ruleset.json to /api/nft/upload")
+            return {}
+
+        try:
+            with open(self.cache_file, 'r') as f:
+                json_output = f.read()
+            rules = self._parse_json_ruleset(json_output)
+            print(f"[NFT Parser] Loaded {len(rules)} rules from cache: {self.cache_file}")
+            return rules
+        except Exception as e:
+            print(f"[NFT Parser] Error loading cache: {e}")
+            return {}
+
+    def load_from_json_file(self, filepath: str) -> int:
+        """
+        Load ruleset from a JSON file exported from nft
+
+        Args:
+            filepath: Path to JSON file containing 'nft -j list ruleset' output
+
+        Returns:
+            Number of rules loaded
+        """
+        try:
+            with open(filepath, 'r') as f:
+                json_output = f.read()
+            self.rules = self._parse_json_ruleset(json_output)
+            # Save to cache for future use
+            self._save_to_cache(json_output)
+            import time
+            self._last_update = time.time()
+            print(f"[NFT Parser] Loaded {len(self.rules)} rules from {filepath}")
+            return len(self.rules)
+        except Exception as e:
+            print(f"[NFT Parser] Error loading from file: {e}")
+            return 0
+
+    def load_from_json_string(self, json_str: str) -> int:
+        """
+        Load ruleset from JSON string
+
+        Args:
+            json_str: JSON string containing 'nft -j list ruleset' output
+
+        Returns:
+            Number of rules loaded
+        """
+        try:
+            self.rules = self._parse_json_ruleset(json_str)
+            # Save to cache for future use
+            self._save_to_cache(json_str)
+            import time
+            self._last_update = time.time()
+            print(f"[NFT Parser] Loaded {len(self.rules)} rules from JSON string")
+            return len(self.rules)
+        except Exception as e:
+            print(f"[NFT Parser] Error loading from JSON: {e}")
+            return 0
 
     def get_rule_text(self, handle: int) -> Optional[str]:
         """Get rule text for a given handle"""
