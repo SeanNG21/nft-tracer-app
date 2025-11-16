@@ -177,20 +177,28 @@ class NFTRuleCache:
         try:
             result = subprocess.run(['which', 'nft'], capture_output=True, timeout=1)
             self.nft_available = result.returncode == 0
-        except Exception:
+            if self.nft_available:
+                print("[NFT_CACHE] ✓ nft command is available")
+            else:
+                print("[NFT_CACHE] ✗ nft command not found")
+        except Exception as e:
             self.nft_available = False
+            print(f"[NFT_CACHE] ✗ Error checking nft: {e}")
 
         return self.nft_available
 
     def _refresh_rules_cache(self):
         """Fetch all rules from nft and cache them"""
         if not self._check_nft_available():
+            print("[NFT_CACHE] Skipping refresh - nft not available")
             return
 
         current_time = time.time()
         if current_time - self.last_refresh < self.cache_ttl and self.rules_cache:
+            print(f"[NFT_CACHE] Cache still valid ({len(self.rules_cache)} rules)")
             return  # Cache still valid
 
+        print("[NFT_CACHE] Refreshing rules cache...")
         try:
             # Run nft --handle --numeric list ruleset
             result = subprocess.run(
@@ -201,14 +209,18 @@ class NFTRuleCache:
             )
 
             if result.returncode != 0:
+                print(f"[NFT_CACHE] ✗ nft command failed with code {result.returncode}")
+                print(f"[NFT_CACHE] stderr: {result.stderr}")
                 return
 
             # Parse output to extract rules with handles
             self.rules_cache = {}
+            lines_with_handle = 0
             for line in result.stdout.splitlines():
                 line = line.strip()
                 # Look for lines with "# handle <number>"
                 if '# handle ' in line:
+                    lines_with_handle += 1
                     try:
                         # Extract handle number
                         handle_part = line.split('# handle ')[-1]
@@ -218,13 +230,23 @@ class NFTRuleCache:
                         rule_text = line.split('# handle ')[0].strip()
 
                         self.rules_cache[handle] = rule_text
-                    except (ValueError, IndexError):
+                    except (ValueError, IndexError) as e:
+                        print(f"[NFT_CACHE] Failed to parse line: {line[:100]}")
                         continue
 
             self.last_refresh = current_time
 
+            print(f"[NFT_CACHE] ✓ Cached {len(self.rules_cache)} rules from {lines_with_handle} lines")
+
+            # Show sample of handles (first 10)
+            if self.rules_cache:
+                sample_handles = sorted(list(self.rules_cache.keys()))[:10]
+                print(f"[NFT_CACHE] Sample handles: {sample_handles}")
+
         except Exception as e:
-            print(f"[!] Failed to refresh nft rules cache: {e}")
+            print(f"[NFT_CACHE] ✗ Failed to refresh nft rules cache: {e}")
+            import traceback
+            traceback.print_exc()
 
     def get_rule_text(self, rule_handle):
         """Get rule text by handle"""
@@ -232,12 +254,25 @@ class NFTRuleCache:
             return None
 
         if not self._check_nft_available():
+            print(f"[NFT_CACHE] get_rule_text({rule_handle}) - nft not available")
             return None
 
         # Refresh cache if needed
         self._refresh_rules_cache()
 
-        return self.rules_cache.get(rule_handle)
+        rule_text = self.rules_cache.get(rule_handle)
+        if rule_text:
+            print(f"[NFT_CACHE] ✓ Found rule {rule_handle}: {rule_text[:80]}...")
+        else:
+            print(f"[NFT_CACHE] ✗ Rule handle {rule_handle} (0x{rule_handle:x}) not found in cache")
+            if len(self.rules_cache) > 0:
+                # Show nearby handles for debugging
+                all_handles = sorted(self.rules_cache.keys())
+                print(f"[NFT_CACHE]   Available handles: {all_handles[:20]}...")
+            else:
+                print(f"[NFT_CACHE]   Cache is empty!")
+
+        return rule_text
 
 nft_cache = NFTRuleCache()
 
