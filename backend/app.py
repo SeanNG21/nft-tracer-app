@@ -310,65 +310,74 @@ class NFTRuleCache:
         """Get rule text by handle with intelligent fallback matching
 
         Args:
-            rule_handle: Rule handle from eBPF trace
+            rule_handle: Rule handle from eBPF trace (may be unreliable!)
             verdict: Verdict string for fallback matching (optional)
             hook: Hook number for context (optional)
-            rule_seq: Rule sequence number in chain (optional, most accurate!)
+            rule_seq: Rule sequence number in chain (optional, most reliable!)
         """
         if rule_handle is None or rule_handle == 0:
             return None
 
         if not self._check_nft_available():
-            print(f"[NFT_CACHE] get_rule_text({rule_handle}) - nft not available")
             return None
 
         # Refresh cache if needed
         self._refresh_rules_cache()
 
-        # Try direct handle match first
-        rule_text = self.rules_cache.get(rule_handle)
-        if rule_text:
-            print(f"[NFT_CACHE] ✓ Found rule {rule_handle}: {rule_text[:80]}...")
-            return rule_text
-
-        # Handle not found - try fallback matching
-        print(f"[NFT_CACHE] ✗ Rule handle {rule_handle} (0x{rule_handle:x}) not found in cache")
-
         if len(self.rules_metadata) == 0:
-            print(f"[NFT_CACHE]   Cache is empty!")
+            print(f"[NFT_CACHE] Cache is empty!")
             return None
 
-        # Map hook to likely chain (heuristic)
+        # Check if handle is valid (exists in cache)
+        handle_is_valid = rule_handle in self.rules_cache
+
+        # Try direct handle match first (if valid)
+        if handle_is_valid:
+            rule_text = self.rules_cache[rule_handle]
+            print(f"[NFT_CACHE] ✓ Found by handle {rule_handle}: {rule_text[:80]}...")
+            return rule_text
+
+        # Handle is invalid or not found
+        # The eBPF extract_rule_handle() is heuristic and often wrong!
+        # Prefer matching by rule_seq + verdict + hook instead
+        print(f"[NFT_CACHE] ⚠ Invalid handle {rule_handle} (0x{rule_handle:x}) - using fallback")
+
+        # Map hook to likely chain name
         hook_chain_map = {
-            0: 'PREROUTING',
-            1: 'INPUT',
-            2: 'FORWARD',
-            3: 'OUTPUT',
-            4: 'POSTROUTING'
+            0: ['prerouting', 'PREROUTING'],
+            1: ['input', 'INPUT'],
+            2: ['forward', 'FORWARD'],
+            3: ['output', 'OUTPUT'],
+            4: ['postrouting', 'POSTROUTING']
         }
-        likely_chain = hook_chain_map.get(hook, '').lower() if hook is not None else None
+        likely_chains = hook_chain_map.get(hook, []) if hook is not None else []
 
-        # STRATEGY 1: Match by rule_seq + chain + verdict (MOST ACCURATE)
-        if rule_seq is not None and likely_chain:
-            print(f"[NFT_CACHE] 🔍 Trying fallback match by rule_seq={rule_seq}, chain={likely_chain}, verdict={verdict}")
-
-            # Collect all candidates matching rule_seq + chain
+        # STRATEGY 1: Match by rule_seq + hook/chain + verdict (MOST RELIABLE)
+        # This is the most accurate because rule_seq is tracked correctly per chain
+        if rule_seq is not None and rule_seq > 0 and likely_chains:
+            # Collect all rules matching rule_seq + chain
             seq_candidates = []
+
             for handle, meta in self.rules_metadata.items():
-                if (meta.get('rule_seq') == rule_seq and
-                    meta['chain'] and likely_chain in meta['chain'].lower()):
+                chain_name = meta.get('chain', '').lower()
 
-                    # IMPORTANT: If verdict provided, require it to match
-                    # This prevents matching wrong rules when rule_seq is unreliable
-                    if verdict and meta['verdict'] != verdict.lower():
-                        print(f"[NFT_CACHE]   Skipping rule seq={rule_seq}: verdict mismatch "
-                              f"(event={verdict}, rule={meta['verdict']}) - {meta['rule_text'][:50]}")
-                        continue
+                # Check if chain matches the hook
+                chain_matches = any(lc.lower() in chain_name for lc in likely_chains)
 
-                    # Score: prefer rules with matching verdict
-                    score = 100  # Base score for rule_seq + chain match
-                    if verdict and meta['verdict'] == verdict.lower():
-                        score += 1000  # Big bonus for verdict match
+                if meta.get('rule_seq') == rule_seq and chain_matches:
+                    # Calculate match score
+                    score = 1000  # Base score for rule_seq + chain match
+
+                    # Verdict match is important but not critical
+                    # (verdict from eBPF can be decoded differently)
+                    if verdict and meta.get('verdict'):
+                        if meta['verdict'] == verdict.lower():
+                            score += 500  # Bonus for exact verdict match
+                        # Also check for verdict family matches
+                        elif verdict.lower() in ['jump', 'goto'] and meta['verdict'] in ['jump', 'goto']:
+                            score += 200  # Partial match for jump/goto family
+                        elif verdict.lower() in ['continue', 'return'] and meta['verdict'] in ['continue', 'return']:
+                            score += 200  # Partial match for continue/return family
 
                     seq_candidates.append((score, handle, meta))
 
@@ -377,45 +386,55 @@ class NFTRuleCache:
                 seq_candidates.sort(key=lambda x: x[0], reverse=True)
                 best_score, best_handle, best_meta = seq_candidates[0]
 
-                verdict_match = "✓" if verdict and best_meta['verdict'] == verdict.lower() else "✗"
-                print(f"[NFT_CACHE] 💡 Matched by rule_seq: handle={best_handle}, "
-                      f"verdict_match={verdict_match}, score={best_score}, "
-                      f"table={best_meta['table']}, chain={best_meta['chain']}, "
-                      f"seq={best_meta['rule_seq']}, rule={best_meta['rule_text'][:60]}...")
+                print(f"[NFT_CACHE] ✓ Matched by rule_seq: seq={rule_seq}, hook={hook}, "
+                      f"verdict={verdict}, found: handle={best_handle}, "
+                      f"table={best_meta.get('table')}, chain={best_meta.get('chain')}, "
+                      f"rule={best_meta['rule_text'][:70]}...")
 
                 return best_meta['rule_text']
 
-        # STRATEGY 2: Match by verdict + chain (fallback)
-        if verdict:
-            print(f"[NFT_CACHE] 🔍 Trying fallback match by verdict={verdict}, chain={likely_chain}")
-
-            # Search for rules matching criteria
+        # STRATEGY 2: Match by verdict + hook/chain (less reliable)
+        if verdict and likely_chains:
             candidates = []
+
             for handle, meta in self.rules_metadata.items():
-                if meta['verdict'] == verdict.lower():
-                    score = 1
-                    # Bonus if chain matches
-                    if likely_chain and meta['chain'] and likely_chain in meta['chain'].lower():
-                        score += 10
-                    # Extra bonus if rule_seq also matches
+                chain_name = meta.get('chain', '').lower()
+                chain_matches = any(lc.lower() in chain_name for lc in likely_chains)
+
+                if meta.get('verdict') == verdict.lower() and chain_matches:
+                    score = 100  # Base score
+
+                    # Bonus if rule_seq also matches
                     if rule_seq is not None and meta.get('rule_seq') == rule_seq:
-                        score += 100
+                        score += 500
+
                     candidates.append((score, handle, meta))
 
             if candidates:
-                # Sort by score and take best match
                 candidates.sort(key=lambda x: x[0], reverse=True)
                 best_score, best_handle, best_meta = candidates[0]
 
-                print(f"[NFT_CACHE] 💡 Matched by verdict: handle={best_handle}, "
-                      f"score={best_score}, table={best_meta['table']}, chain={best_meta['chain']}, "
-                      f"seq={best_meta.get('rule_seq', '?')}, rule={best_meta['rule_text'][:60]}...")
+                print(f"[NFT_CACHE] ~ Matched by verdict: verdict={verdict}, hook={hook}, "
+                      f"found: handle={best_handle}, chain={best_meta.get('chain')}, "
+                      f"rule={best_meta['rule_text'][:70]}...")
 
                 return best_meta['rule_text']
 
+        # STRATEGY 3: Just match by rule_seq if we have it (last resort)
+        if rule_seq is not None and rule_seq > 0:
+            for handle, meta in self.rules_metadata.items():
+                if meta.get('rule_seq') == rule_seq:
+                    print(f"[NFT_CACHE] ? Weak match by rule_seq only: seq={rule_seq}, "
+                          f"handle={handle}, table={meta.get('table')}, "
+                          f"chain={meta.get('chain')}, rule={meta['rule_text'][:70]}...")
+                    return meta['rule_text']
+
         # No match found
-        all_handles = sorted(self.rules_cache.keys())
-        print(f"[NFT_CACHE]   Available handles: {all_handles[:20]}...")
+        print(f"[NFT_CACHE] ✗ No match found for: handle={rule_handle}, "
+              f"rule_seq={rule_seq}, hook={hook}, verdict={verdict}")
+        all_handles = sorted(self.rules_cache.keys())[:20]
+        print(f"[NFT_CACHE]   Available handles: {all_handles}...")
+
         return None
 
 nft_cache = NFTRuleCache()
