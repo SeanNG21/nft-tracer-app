@@ -161,10 +161,11 @@ kallsyms = KallsymsLookup()
 # NFT RULE CACHE - Fetch rule text from nft command
 # ============================================================================
 class NFTRuleCache:
-    """Cache and lookup nft rules by handle"""
+    """Cache and lookup nft rules by handle with fallback matching"""
 
     def __init__(self):
         self.rules_cache = {}  # handle -> rule_text
+        self.rules_metadata = {}  # handle -> {table, chain, rule_text, verdict}
         self.nft_available = None
         self.last_refresh = 0
         self.cache_ttl = 60  # Refresh cache every 60 seconds
@@ -213,13 +214,40 @@ class NFTRuleCache:
                 print(f"[NFT_CACHE] stderr: {result.stderr}")
                 return
 
-            # Parse output to extract rules with handles
+            # Parse output to extract rules with handles AND metadata
             self.rules_cache = {}
+            self.rules_metadata = {}
             lines_with_handle = 0
+
+            current_table = None
+            current_chain = None
+
             for line in result.stdout.splitlines():
+                original_line = line
                 line = line.strip()
-                # Look for lines with "# handle <number>"
-                if '# handle ' in line:
+
+                # Track current table: "table ip filter { # handle 2"
+                if line.startswith('table '):
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        family = parts[1]  # ip, ip6, inet, etc.
+                        table_name = parts[2]  # filter, nat, etc.
+                        current_table = f"{family} {table_name}"
+                        current_chain = None
+
+                # Track current chain: "chain INPUT { # handle 1"
+                elif line.startswith('chain ') and '{' in line:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        current_chain = parts[1]
+
+                # Reset on closing brace (end of chain/table)
+                elif line == '}':
+                    # Don't reset table yet, could be end of chain only
+                    pass
+
+                # Parse rules with "# handle <number>"
+                if '# handle ' in line and current_table and current_chain:
                     lines_with_handle += 1
                     try:
                         # Extract handle number
@@ -229,7 +257,20 @@ class NFTRuleCache:
                         # Extract rule text (everything before "# handle")
                         rule_text = line.split('# handle ')[0].strip()
 
+                        # Detect verdict from rule text
+                        verdict = None
+                        for v in ['accept', 'drop', 'reject', 'continue', 'return', 'jump', 'goto', 'queue']:
+                            if v in rule_text.lower():
+                                verdict = v
+                                break
+
                         self.rules_cache[handle] = rule_text
+                        self.rules_metadata[handle] = {
+                            'table': current_table,
+                            'chain': current_chain,
+                            'rule_text': rule_text,
+                            'verdict': verdict
+                        }
                     except (ValueError, IndexError) as e:
                         print(f"[NFT_CACHE] Failed to parse line: {line[:100]}")
                         continue
@@ -248,8 +289,14 @@ class NFTRuleCache:
             import traceback
             traceback.print_exc()
 
-    def get_rule_text(self, rule_handle):
-        """Get rule text by handle"""
+    def get_rule_text(self, rule_handle, verdict=None, hook=None):
+        """Get rule text by handle with fallback matching
+
+        Args:
+            rule_handle: Rule handle from eBPF trace
+            verdict: Verdict string for fallback matching (optional)
+            hook: Hook number for context (optional)
+        """
         if rule_handle is None or rule_handle == 0:
             return None
 
@@ -260,19 +307,58 @@ class NFTRuleCache:
         # Refresh cache if needed
         self._refresh_rules_cache()
 
+        # Try direct handle match first
         rule_text = self.rules_cache.get(rule_handle)
         if rule_text:
             print(f"[NFT_CACHE] ✓ Found rule {rule_handle}: {rule_text[:80]}...")
-        else:
-            print(f"[NFT_CACHE] ✗ Rule handle {rule_handle} (0x{rule_handle:x}) not found in cache")
-            if len(self.rules_cache) > 0:
-                # Show nearby handles for debugging
-                all_handles = sorted(self.rules_cache.keys())
-                print(f"[NFT_CACHE]   Available handles: {all_handles[:20]}...")
-            else:
-                print(f"[NFT_CACHE]   Cache is empty!")
+            return rule_text
 
-        return rule_text
+        # Handle not found - try fallback matching
+        print(f"[NFT_CACHE] ✗ Rule handle {rule_handle} (0x{rule_handle:x}) not found in cache")
+
+        # FALLBACK: Try to find rule by verdict and hook context
+        if verdict and len(self.rules_metadata) > 0:
+            print(f"[NFT_CACHE] 🔍 Trying fallback match: verdict={verdict}, hook={hook}")
+
+            # Map hook to likely chain (heuristic)
+            hook_chain_map = {
+                0: 'PREROUTING',
+                1: 'INPUT',
+                2: 'FORWARD',
+                3: 'OUTPUT',
+                4: 'POSTROUTING'
+            }
+            likely_chain = hook_chain_map.get(hook, '').lower() if hook is not None else None
+
+            # Search for rules matching criteria
+            candidates = []
+            for handle, meta in self.rules_metadata.items():
+                if meta['verdict'] == verdict.lower():
+                    score = 1
+                    # Bonus if chain matches
+                    if likely_chain and meta['chain'] and likely_chain in meta['chain'].lower():
+                        score += 2
+                    candidates.append((score, handle, meta))
+
+            if candidates:
+                # Sort by score and take best match
+                candidates.sort(key=lambda x: x[0], reverse=True)
+                best_score, best_handle, best_meta = candidates[0]
+
+                print(f"[NFT_CACHE] 💡 Fallback found: handle={best_handle}, "
+                      f"table={best_meta['table']}, chain={best_meta['chain']}, "
+                      f"rule={best_meta['rule_text'][:60]}...")
+
+                return best_meta['rule_text']
+
+        if len(self.rules_cache) > 0:
+            # Show available handles for debugging
+            all_handles = sorted(self.rules_cache.keys())
+            print(f"[NFT_CACHE]   Available handles: {all_handles[:20]}...")
+        else:
+            print(f"[NFT_CACHE]   Cache is empty!")
+
+        return None
 
 nft_cache = NFTRuleCache()
 
@@ -421,7 +507,9 @@ class PacketTrace:
         # Fetch rule text from nft if available
         rule_text = None
         if event.rule_handle and event.rule_handle > 0:
-            rule_text = nft_cache.get_rule_text(event.rule_handle)
+            # Pass verdict and hook for fallback matching
+            verdict_str = self._verdict_str(event.verdict) if event.verdict else None
+            rule_text = nft_cache.get_rule_text(event.rule_handle, verdict=verdict_str, hook=event.hook)
 
         event_dict = {
             'timestamp': event.timestamp,
