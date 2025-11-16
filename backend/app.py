@@ -301,6 +301,20 @@ class NFTRuleCache:
                 sample_handles = sorted(list(self.rules_cache.keys()))[:10]
                 print(f"[NFT_CACHE] Sample handles: {sample_handles}")
 
+            # Debug: Show all rules with their metadata for verification
+            print(f"[NFT_CACHE] Rules by sequence in each chain:")
+            chain_rules = {}
+            for handle, meta in self.rules_metadata.items():
+                chain_key = f"{meta['table']}:{meta['chain']}"
+                if chain_key not in chain_rules:
+                    chain_rules[chain_key] = []
+                chain_rules[chain_key].append((meta['rule_seq'], handle, meta['verdict'], meta['rule_text'][:60]))
+
+            for chain_key, rules in sorted(chain_rules.items()):
+                print(f"[NFT_CACHE]   {chain_key}:")
+                for seq, handle, verdict, rule_text in sorted(rules):
+                    print(f"[NFT_CACHE]     seq={seq}, handle={handle}, verdict={verdict}, rule={rule_text}...")
+
         except Exception as e:
             print(f"[NFT_CACHE] ✗ Failed to refresh nft rules cache: {e}")
             import traceback
@@ -368,16 +382,25 @@ class NFTRuleCache:
                     # Calculate match score
                     score = 1000  # Base score for rule_seq + chain match
 
-                    # Verdict match is important but not critical
-                    # (verdict from eBPF can be decoded differently)
+                    # Verdict matching - handle special cases:
+                    # 1. CONTINUE/RETURN are intermediate verdicts, not rule verdicts
+                    # 2. REJECT in rule text => DROP verdict code in kernel
+                    # 3. BREAK is also intermediate
                     if verdict and meta.get('verdict'):
-                        if meta['verdict'] == verdict.lower():
-                            score += 500  # Bonus for exact verdict match
-                        # Also check for verdict family matches
-                        elif verdict.lower() in ['jump', 'goto'] and meta['verdict'] in ['jump', 'goto']:
-                            score += 200  # Partial match for jump/goto family
-                        elif verdict.lower() in ['continue', 'return'] and meta['verdict'] in ['continue', 'return']:
-                            score += 200  # Partial match for continue/return family
+                        # Skip verdict matching for intermediate verdicts
+                        # These are from expressions inside rules, not the final rule verdict
+                        if verdict.lower() not in ['continue', 'return', 'break']:
+                            rule_verdict = meta['verdict']
+
+                            # Exact match
+                            if rule_verdict == verdict.lower():
+                                score += 500  # Bonus for exact verdict match
+                            # REJECT rule => DROP verdict code
+                            elif rule_verdict == 'reject' and verdict.lower() == 'drop':
+                                score += 400  # High bonus for reject/drop match
+                            # Verdict family matches
+                            elif verdict.lower() in ['jump', 'goto'] and rule_verdict in ['jump', 'goto']:
+                                score += 200  # Partial match for jump/goto family
 
                     seq_candidates.append((score, handle, meta))
 
@@ -386,10 +409,21 @@ class NFTRuleCache:
                 seq_candidates.sort(key=lambda x: x[0], reverse=True)
                 best_score, best_handle, best_meta = seq_candidates[0]
 
-                print(f"[NFT_CACHE] ✓ Matched by rule_seq: seq={rule_seq}, hook={hook}, "
-                      f"verdict={verdict}, found: handle={best_handle}, "
-                      f"table={best_meta.get('table')}, chain={best_meta.get('chain')}, "
-                      f"rule={best_meta['rule_text'][:70]}...")
+                # Clear explanation of match
+                match_reason = f"seq={rule_seq}+chain"
+                if verdict and verdict.lower() not in ['continue', 'return', 'break']:
+                    if best_meta.get('verdict') == 'reject' and verdict.lower() == 'drop':
+                        match_reason += f" (event_verdict=DROP matches rule_verdict=REJECT)"
+                    elif best_meta.get('verdict') == verdict.lower():
+                        match_reason += f" (verdict={verdict}✓)"
+                    else:
+                        match_reason += f" (event={verdict}, rule={best_meta.get('verdict')})"
+                elif verdict and verdict.lower() in ['continue', 'return', 'break']:
+                    match_reason += f" (intermediate verdict={verdict}, skipped)"
+
+                print(f"[NFT_CACHE] ✓ Matched: {match_reason}")
+                print(f"[NFT_CACHE]   => handle={best_handle}, table={best_meta.get('table')}, "
+                      f"chain={best_meta.get('chain')}, rule={best_meta['rule_text'][:90]}...")
 
                 return best_meta['rule_text']
 
