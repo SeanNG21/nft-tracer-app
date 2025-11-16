@@ -182,9 +182,13 @@ class NFTRulesetParser:
 
         return ' '.join(parts) if parts else "(no expressions)"
 
-    def _expr_to_text(self, expr: dict) -> str:
+    def _expr_to_text(self, expr) -> str:
         """Convert an expression object to text"""
-        if not expr:
+        # Handle primitive types first (int, str) before dict operations
+        if isinstance(expr, (str, int)):
+            return str(expr)
+
+        if not expr or not isinstance(expr, dict):
             return "?"
 
         if 'payload' in expr:
@@ -198,9 +202,6 @@ class NFTRulesetParser:
             addr = prefix.get('addr', '')
             length = prefix.get('len', 0)
             return f"{addr}/{length}"
-
-        elif isinstance(expr, (str, int)):
-            return str(expr)
 
         return str(expr)
 
