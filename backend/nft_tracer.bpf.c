@@ -97,14 +97,16 @@ static __always_inline void read_comm_safe(char *dest, u32 size)
 //     u32 udata_len;            // offset 28, size 4
 //     unsigned char data[]      // offset 32, expressions start here
 // };
+// FIXED: Reduced search range for BPF verifier compatibility (kernel 4.4.0)
 static __always_inline u64 extract_rule_handle(void *expr)
 {
     if (!expr)
         return 0;
 
-    // Method 1: Search backwards from expr to find rule header with validation
+    // Method 1: Search backwards with validation (REDUCED RANGE for old kernels)
+    // Search from 32 to 192 bytes (20 iterations instead of 53)
     #pragma unroll
-    for (int search_offset = 32; search_offset <= 448; search_offset += 8) {
+    for (int search_offset = 32; search_offset <= 192; search_offset += 8) {
         void *potential_rule = (char *)expr - search_offset;
 
         u64 handle = 0;
@@ -135,11 +137,11 @@ static __always_inline u64 extract_rule_handle(void *expr)
         }
     }
 
-    // Method 2: Fallback to old method for compatibility
-    s32 offsets[] = {-16, -24, -32, -40, -48, -56, -64, -72, -80, -96, -112, -128};
+    // Method 2: Quick fallback checks at common offsets
+    s32 offsets[] = {-16, -24, -32, -40, -48, -56, -64, -72, -80, -96};
 
     #pragma unroll
-    for (int i = 0; i < 12; i++) {
+    for (int i = 0; i < 10; i++) {
         u64 potential_handle = 0;
 
         if (bpf_probe_read_kernel(&potential_handle, sizeof(potential_handle),
@@ -334,14 +336,15 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
     if (!info)
         return 0;
 
-    // IMPROVED: Extract rule handle FIRST
+    // ALWAYS increment rule_seq (for backward compatibility)
+    // This counts expression evaluations, not unique rules
+    info->rule_seq++;
+
+    // Extract rule handle with improved method
     u64 rule_handle = extract_rule_handle(expr);
 
-    // IMPROVED: Only increment rule_seq when we see a NEW rule (handle changes)
-    if (rule_handle != 0 && rule_handle != info->last_rule_handle) {
-        info->rule_seq++;
-        info->last_rule_handle = rule_handle;
-    }
+    // Update last seen handle for reference
+    info->last_rule_handle = rule_handle;
 
     s32 verdict_code = 0;
     int read_ok = 0;
