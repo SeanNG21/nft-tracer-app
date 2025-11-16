@@ -42,7 +42,8 @@ struct skb_info {
     u64 chain_addr;
     u8 hook;
     u8 pf;
-    u16 rule_seq;
+    u16 rule_seq;           // IMPROVED: Now tracks actual rule index
+    u64 last_rule_handle;   // IMPROVED: Track last seen rule to detect changes
     u8 protocol;
     u32 src_ip;
     u32 dst_ip;
@@ -88,42 +89,69 @@ static __always_inline void read_comm_safe(char *dest, u32 size)
     }
 }
 
+// IMPROVED: Precise rule_handle extraction based on struct nft_rule layout
+// struct nft_rule {
+//     struct list_head list;    // offset 0, size 16
+//     u64 handle;               // offset 16, size 8 ← TARGET
+//     u32 dlen;                 // offset 24, size 4
+//     u32 udata_len;            // offset 28, size 4
+//     unsigned char data[]      // offset 32, expressions start here
+// };
 static __always_inline u64 extract_rule_handle(void *expr)
 {
     if (!expr)
         return 0;
-    
-    s32 offsets[] = {-16, -24, -32, -40, -48, -56, -64, -72, -80, -96, -112, -128, -144, -160};
-    
+
+    // Method 1: Search backwards from expr to find rule header with validation
     #pragma unroll
-    for (int i = 0; i < 14; i++) {
+    for (int search_offset = 32; search_offset <= 448; search_offset += 8) {
+        void *potential_rule = (char *)expr - search_offset;
+
+        u64 handle = 0;
+        u32 dlen = 0;
+
+        // Read handle at offset 16 from potential_rule
+        if (bpf_probe_read_kernel(&handle, sizeof(handle),
+                                   (char *)potential_rule + 16) != 0)
+            continue;
+
+        // Validate handle: must be reasonable value
+        if (handle == 0 || handle >= 0x100000 || handle == 0xFFFFFFFFFFFFFFFFULL)
+            continue;
+
+        // Read dlen at offset 24 to verify
+        if (bpf_probe_read_kernel(&dlen, sizeof(dlen),
+                                   (char *)potential_rule + 24) != 0)
+            continue;
+
+        // Validate dlen: should be reasonable (typically < 4096 bytes)
+        if (dlen == 0 || dlen > 4096)
+            continue;
+
+        // Verify that expr is within [rule->data, rule->data + dlen]
+        u64 expr_offset = (u64)expr - (u64)potential_rule - 32;
+        if (expr_offset < dlen) {
+            return handle;
+        }
+    }
+
+    // Method 2: Fallback to old method for compatibility
+    s32 offsets[] = {-16, -24, -32, -40, -48, -56, -64, -72, -80, -96, -112, -128};
+
+    #pragma unroll
+    for (int i = 0; i < 12; i++) {
         u64 potential_handle = 0;
-        
-        if (bpf_probe_read_kernel(&potential_handle, sizeof(potential_handle), 
+
+        if (bpf_probe_read_kernel(&potential_handle, sizeof(potential_handle),
                                    (char *)expr + offsets[i]) == 0) {
-            if (potential_handle > 0 && 
+            if (potential_handle > 0 &&
                 potential_handle < 0x100000 &&
                 potential_handle != 0xFFFFFFFFFFFFFFFFULL) {
                 return potential_handle;
             }
         }
     }
-    
-    s32 large_offsets[] = {-32, -64, -96, -128, -192, -256};
-    
-    #pragma unroll
-    for (int i = 0; i < 6; i++) {
-        void *potential_rule_base = (char *)expr + large_offsets[i];
-        u64 potential_handle = 0;
-        
-        if (bpf_probe_read_kernel(&potential_handle, sizeof(potential_handle),
-                                   (char *)potential_rule_base + 16) == 0) {
-            if (potential_handle > 0 && potential_handle < 0x100000) {
-                return potential_handle;
-            }
-        }
-    }
-    
+
     return 0;
 }
 
@@ -216,13 +244,14 @@ int kprobe__nft_do_chain(struct pt_regs *ctx)
     info.chain_addr = (u64)priv;
     info.hook = hook;
     info.pf = pf;
-    info.rule_seq = 0;
+    info.rule_seq = 0;           // IMPROVED: Reset rule counter
+    info.last_rule_handle = 0;   // IMPROVED: Reset last seen handle
     info.protocol = 0;
     info.src_ip = 0;
     info.dst_ip = 0;
     info.src_port = 0;
     info.dst_port = 0;
-    
+
     extract_packet_info(pkt, &info);
     skb_map.update(&tid, &info);
 
@@ -290,7 +319,7 @@ int kretprobe__nft_do_chain(struct pt_regs *ctx)
 }
 
 // ============================================
-// HOOK 2: nft_immediate_eval
+// HOOK 2: nft_immediate_eval - IMPROVED
 // ============================================
 int kprobe__nft_immediate_eval(struct pt_regs *ctx)
 {
@@ -305,32 +334,37 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
     if (!info)
         return 0;
 
-    info->rule_seq++;
+    // IMPROVED: Extract rule handle FIRST
+    u64 rule_handle = extract_rule_handle(expr);
+
+    // IMPROVED: Only increment rule_seq when we see a NEW rule (handle changes)
+    if (rule_handle != 0 && rule_handle != info->last_rule_handle) {
+        info->rule_seq++;
+        info->last_rule_handle = rule_handle;
+    }
 
     s32 verdict_code = 0;
     int read_ok = 0;
-    
+
     if (bpf_probe_read_kernel(&verdict_code, sizeof(verdict_code), (char *)expr + 8) == 0) {
-        if ((verdict_code >= -5 && verdict_code <= 5) || 
+        if ((verdict_code >= -5 && verdict_code <= 5) ||
             (verdict_code >= 0x10000 && verdict_code <= 0x1FFFF)) {
             read_ok = 1;
         }
     }
-    
+
     if (!read_ok) {
         if (bpf_probe_read_kernel(&verdict_code, sizeof(verdict_code), (char *)expr + 16) == 0) {
-            if ((verdict_code >= -5 && verdict_code <= 5) || 
+            if ((verdict_code >= -5 && verdict_code <= 5) ||
                 (verdict_code >= 0x10000 && verdict_code <= 0x1FFFF)) {
                 read_ok = 1;
             }
         }
     }
-    
+
     if (!read_ok) {
         bpf_probe_read_kernel(&verdict_code, sizeof(verdict_code), (char *)expr + 24);
     }
-
-    u64 rule_handle = extract_rule_handle(expr);
 
     struct nft_event evt = {};
     evt.timestamp = bpf_ktime_get_ns();
