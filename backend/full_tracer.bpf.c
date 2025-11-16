@@ -24,31 +24,32 @@ struct trace_event {
     u64 skb_addr;
     u32 cpu_id;
     u32 pid;
-    
+
     u8 event_type;
     u8 hook;
     u8 pf;
     u8 protocol;
-    
+
     u32 src_ip;
     u32 dst_ip;
     u16 src_port;
     u16 dst_port;
     u32 length;
-    
+
     // NFT specific fields
     u64 chain_addr;
     u64 expr_addr;
     u8 chain_depth;
     u16 rule_seq;
     u64 rule_handle;
-    
+    u64 last_rule_handle;  // Track last seen rule_handle to detect new rules
+
     // Verdict info
     s32 verdict_raw;
     u32 verdict;
     u16 queue_num;
     u8 has_queue_bypass;
-    
+
     // Function tracking
     u64 func_ip;  // NEW: Function instruction pointer for name lookup
     char function_name[64];
@@ -251,7 +252,8 @@ int kprobe__nft_do_chain(struct pt_regs *ctx)
     evt.event_type = EVENT_TYPE_NFT_CHAIN;
     evt.chain_addr = (u64)priv;
     evt.chain_depth = depth;
-    
+    evt.last_rule_handle = 0;  // Initialize last_rule_handle to track rule changes
+
     extract_packet_info_from_pkt(pkt, &evt);
     read_comm_safe(evt.comm, sizeof(evt.comm));
     
@@ -332,12 +334,18 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
     if (!stored)
         return 0;
 
-    stored->rule_seq++;
+    // Extract rule_handle FIRST to determine if this is a new rule
+    u64 rule_handle = extract_rule_handle(expr);
+
+    // Only increment rule_seq when we encounter a NEW rule
+    // (rule_handle is valid and different from the last one we saw)
+    if (rule_handle > 0 && rule_handle != stored->last_rule_handle) {
+        stored->rule_seq++;
+        stored->last_rule_handle = rule_handle;  // Update last seen rule_handle
+    }
 
     s32 verdict_code = 0;
     bpf_probe_read_kernel(&verdict_code, sizeof(verdict_code), (char *)expr + 8);
-    
-    u64 rule_handle = extract_rule_handle(expr);
 
     struct trace_event evt = {};
     evt.timestamp = bpf_ktime_get_ns();
