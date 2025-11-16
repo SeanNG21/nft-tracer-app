@@ -366,60 +366,73 @@ class NFTRuleCache:
         }
         likely_chains = hook_chain_map.get(hook, []) if hook is not None else []
 
-        # STRATEGY 1: Match by rule_seq + hook/chain + verdict (MOST RELIABLE)
-        # This is the most accurate because rule_seq is tracked correctly per chain
-        if rule_seq is not None and rule_seq > 0 and likely_chains:
-            # Collect all rules matching rule_seq + chain
-            seq_candidates = []
+        # STRATEGY 1: Match by verdict + hook/chain (MOST RELIABLE for actual rule)
+        # NOTE: rule_seq from eBPF is unreliable because nft_immediate_eval is called
+        # for EACH immediate expression (counter, verdict, etc.), not per rule!
+        # So we prioritize VERDICT matching over rule_seq
+        if verdict and verdict.lower() not in ['continue', 'return', 'break'] and likely_chains:
+            verdict_candidates = []
 
             for handle, meta in self.rules_metadata.items():
                 chain_name = meta.get('chain', '').lower()
-
-                # Check if chain matches the hook
                 chain_matches = any(lc.lower() in chain_name for lc in likely_chains)
 
-                if meta.get('rule_seq') == rule_seq and chain_matches:
-                    # Calculate match score
-                    score = 1000  # Base score for rule_seq + chain match
+                if not chain_matches:
+                    continue
 
-                    # Verdict matching - handle special cases:
-                    # 1. CONTINUE/RETURN are intermediate verdicts, not rule verdicts
-                    # 2. REJECT in rule text => DROP verdict code in kernel
-                    # 3. BREAK is also intermediate
-                    if verdict and meta.get('verdict'):
-                        # Skip verdict matching for intermediate verdicts
-                        # These are from expressions inside rules, not the final rule verdict
-                        if verdict.lower() not in ['continue', 'return', 'break']:
-                            rule_verdict = meta['verdict']
+                rule_verdict = meta.get('verdict')
+                if not rule_verdict:
+                    continue
 
-                            # Exact match
-                            if rule_verdict == verdict.lower():
-                                score += 500  # Bonus for exact verdict match
-                            # REJECT rule => DROP verdict code
-                            elif rule_verdict == 'reject' and verdict.lower() == 'drop':
-                                score += 400  # High bonus for reject/drop match
-                            # Verdict family matches
-                            elif verdict.lower() in ['jump', 'goto'] and rule_verdict in ['jump', 'goto']:
-                                score += 200  # Partial match for jump/goto family
+                # Calculate match score based on verdict
+                score = 0
+                verdict_matched = False
 
-                    seq_candidates.append((score, handle, meta))
+                # Exact verdict match
+                if rule_verdict == verdict.lower():
+                    score = 1000
+                    verdict_matched = True
+                # REJECT rule => DROP verdict code in kernel
+                elif rule_verdict == 'reject' and verdict.lower() == 'drop':
+                    score = 900  # High score but slightly less than exact
+                    verdict_matched = True
+                # Verdict family matches
+                elif verdict.lower() in ['jump', 'goto'] and rule_verdict in ['jump', 'goto']:
+                    score = 700
+                    verdict_matched = True
 
-            if seq_candidates:
+                if verdict_matched:
+                    # Bonus points if rule_seq is close (but don't require exact match)
+                    # rule_seq from eBPF may be 2x or 3x actual due to multiple expressions per rule
+                    if rule_seq is not None and meta.get('rule_seq') is not None:
+                        actual_seq = meta.get('rule_seq')
+                        # If eBPF rule_seq is around 2x actual (due to counter + verdict)
+                        # or if they're close, give bonus
+                        if rule_seq == actual_seq:
+                            score += 500  # Exact seq match bonus
+                        elif rule_seq <= actual_seq * 3 and rule_seq >= actual_seq:
+                            # rule_seq is in plausible range (actual_seq to 3x actual_seq)
+                            score += 200  # Close enough bonus
+                        elif actual_seq <= rule_seq * 3 and actual_seq >= rule_seq:
+                            # Or vice versa
+                            score += 100
+
+                    verdict_candidates.append((score, handle, meta))
+
+            if verdict_candidates:
                 # Sort by score and take best match
-                seq_candidates.sort(key=lambda x: x[0], reverse=True)
-                best_score, best_handle, best_meta = seq_candidates[0]
+                verdict_candidates.sort(key=lambda x: x[0], reverse=True)
+                best_score, best_handle, best_meta = verdict_candidates[0]
 
                 # Clear explanation of match
-                match_reason = f"seq={rule_seq}+chain"
-                if verdict and verdict.lower() not in ['continue', 'return', 'break']:
-                    if best_meta.get('verdict') == 'reject' and verdict.lower() == 'drop':
-                        match_reason += f" (event_verdict=DROP matches rule_verdict=REJECT)"
-                    elif best_meta.get('verdict') == verdict.lower():
-                        match_reason += f" (verdict={verdict}✓)"
-                    else:
-                        match_reason += f" (event={verdict}, rule={best_meta.get('verdict')})"
-                elif verdict and verdict.lower() in ['continue', 'return', 'break']:
-                    match_reason += f" (intermediate verdict={verdict}, skipped)"
+                match_reason = f"verdict={verdict}+chain"
+                if best_meta.get('verdict') == 'reject' and verdict.lower() == 'drop':
+                    match_reason += f" (DROP matches REJECT)"
+                elif best_meta.get('verdict') == verdict.lower():
+                    match_reason += f" (exact✓)"
+
+                if rule_seq and best_meta.get('rule_seq'):
+                    match_reason += f", rule_seq: event={rule_seq}, rule={best_meta.get('rule_seq')}"
 
                 print(f"[NFT_CACHE] ✓ Matched: {match_reason}")
                 print(f"[NFT_CACHE]   => handle={best_handle}, table={best_meta.get('table')}, "
@@ -427,34 +440,27 @@ class NFTRuleCache:
 
                 return best_meta['rule_text']
 
-        # STRATEGY 2: Match by verdict + hook/chain (less reliable)
-        if verdict and likely_chains:
-            candidates = []
+        # STRATEGY 1B: Handle intermediate verdicts (CONTINUE, RETURN, BREAK)
+        # For these, we can't rely on verdict matching, use rule_seq as hint only
+        if verdict and verdict.lower() in ['continue', 'return', 'break'] and likely_chains:
+            # These are intermediate verdicts from expressions, not final rule verdicts
+            # Just return None or try to guess based on rule_seq
+            print(f"[NFT_CACHE] ⓘ Intermediate verdict {verdict} - cannot reliably match to rule")
 
-            for handle, meta in self.rules_metadata.items():
-                chain_name = meta.get('chain', '').lower()
-                chain_matches = any(lc.lower() in chain_name for lc in likely_chains)
+            # Try to guess: find any rule in this chain with rule_seq <= event rule_seq
+            if rule_seq and rule_seq > 0:
+                for handle, meta in self.rules_metadata.items():
+                    chain_name = meta.get('chain', '').lower()
+                    chain_matches = any(lc.lower() in chain_name for lc in likely_chains)
 
-                if meta.get('verdict') == verdict.lower() and chain_matches:
-                    score = 100  # Base score
+                    if chain_matches and meta.get('rule_seq') and meta.get('rule_seq') <= rule_seq:
+                        print(f"[NFT_CACHE] ~ Best guess: rule_seq={meta.get('rule_seq')} in chain, "
+                              f"rule={meta['rule_text'][:70]}... (may be inaccurate)")
+                        return meta['rule_text']
 
-                    # Bonus if rule_seq also matches
-                    if rule_seq is not None and meta.get('rule_seq') == rule_seq:
-                        score += 500
+            return None
 
-                    candidates.append((score, handle, meta))
-
-            if candidates:
-                candidates.sort(key=lambda x: x[0], reverse=True)
-                best_score, best_handle, best_meta = candidates[0]
-
-                print(f"[NFT_CACHE] ~ Matched by verdict: verdict={verdict}, hook={hook}, "
-                      f"found: handle={best_handle}, chain={best_meta.get('chain')}, "
-                      f"rule={best_meta['rule_text'][:70]}...")
-
-                return best_meta['rule_text']
-
-        # STRATEGY 3: Just match by rule_seq if we have it (last resort)
+        # STRATEGY 2: Just match by rule_seq if we have it (last resort)
         if rule_seq is not None and rule_seq > 0:
             for handle, meta in self.rules_metadata.items():
                 if meta.get('rule_seq') == rule_seq:
