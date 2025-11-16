@@ -348,17 +348,42 @@ class NFTRuleCache:
         }
         likely_chain = hook_chain_map.get(hook, '').lower() if hook is not None else None
 
-        # STRATEGY 1: Match by rule_seq + chain (MOST ACCURATE)
+        # STRATEGY 1: Match by rule_seq + chain + verdict (MOST ACCURATE)
         if rule_seq is not None and likely_chain:
-            print(f"[NFT_CACHE] 🔍 Trying fallback match by rule_seq={rule_seq}, chain={likely_chain}")
+            print(f"[NFT_CACHE] 🔍 Trying fallback match by rule_seq={rule_seq}, chain={likely_chain}, verdict={verdict}")
 
+            # Collect all candidates matching rule_seq + chain
+            seq_candidates = []
             for handle, meta in self.rules_metadata.items():
                 if (meta.get('rule_seq') == rule_seq and
                     meta['chain'] and likely_chain in meta['chain'].lower()):
-                    print(f"[NFT_CACHE] 💡 Matched by rule_seq: handle={handle}, "
-                          f"table={meta['table']}, chain={meta['chain']}, "
-                          f"seq={meta['rule_seq']}, rule={meta['rule_text'][:60]}...")
-                    return meta['rule_text']
+
+                    # IMPORTANT: If verdict provided, require it to match
+                    # This prevents matching wrong rules when rule_seq is unreliable
+                    if verdict and meta['verdict'] != verdict.lower():
+                        print(f"[NFT_CACHE]   Skipping rule seq={rule_seq}: verdict mismatch "
+                              f"(event={verdict}, rule={meta['verdict']}) - {meta['rule_text'][:50]}")
+                        continue
+
+                    # Score: prefer rules with matching verdict
+                    score = 100  # Base score for rule_seq + chain match
+                    if verdict and meta['verdict'] == verdict.lower():
+                        score += 1000  # Big bonus for verdict match
+
+                    seq_candidates.append((score, handle, meta))
+
+            if seq_candidates:
+                # Sort by score and take best match
+                seq_candidates.sort(key=lambda x: x[0], reverse=True)
+                best_score, best_handle, best_meta = seq_candidates[0]
+
+                verdict_match = "✓" if verdict and best_meta['verdict'] == verdict.lower() else "✗"
+                print(f"[NFT_CACHE] 💡 Matched by rule_seq: handle={best_handle}, "
+                      f"verdict_match={verdict_match}, score={best_score}, "
+                      f"table={best_meta['table']}, chain={best_meta['chain']}, "
+                      f"seq={best_meta['rule_seq']}, rule={best_meta['rule_text'][:60]}...")
+
+                return best_meta['rule_text']
 
         # STRATEGY 2: Match by verdict + chain (fallback)
         if verdict:
