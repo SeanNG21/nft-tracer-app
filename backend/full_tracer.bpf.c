@@ -42,7 +42,6 @@ struct trace_event {
     u8 chain_depth;
     u16 rule_seq;
     u64 rule_handle;
-    u64 last_rule_handle;  // Track last seen rule_handle to detect new rules
 
     // Verdict info
     s32 verdict_raw;
@@ -60,6 +59,7 @@ struct trace_event {
 BPF_PERF_OUTPUT(events);
 BPF_HASH(skb_info_map, u64, struct trace_event, 10240);
 BPF_HASH(depth_map, u64, u8, 10240);
+BPF_HASH(last_rule_handle_map, u64, u64, 10240);  // Track last seen rule_handle per tid
 
 // Helper: decode verdict
 static __always_inline u32 decode_verdict(s32 raw_ret, u32 raw_u32)
@@ -252,15 +252,18 @@ int kprobe__nft_do_chain(struct pt_regs *ctx)
     evt.event_type = EVENT_TYPE_NFT_CHAIN;
     evt.chain_addr = (u64)priv;
     evt.chain_depth = depth;
-    evt.last_rule_handle = 0;  // Initialize last_rule_handle to track rule changes
 
     extract_packet_info_from_pkt(pkt, &evt);
     read_comm_safe(evt.comm, sizeof(evt.comm));
-    
+
     // Store with TID as key for kretprobe to retrieve
     if (evt.skb_addr != 0) {
         skb_info_map.update(&tid, &evt);
     }
+
+    // Initialize last_rule_handle for this tid
+    u64 init_handle = 0;
+    last_rule_handle_map.update(&tid, &init_handle);
     
     // FIX #1: DO NOT emit event here - wait for kretprobe to emit chain_exit with verdict
     // This eliminates duplicate chain_exit events
@@ -317,6 +320,7 @@ int kretprobe__nft_do_chain(struct pt_regs *ctx)
     } else {
         skb_info_map.delete(&tid);
         depth_map.delete(&tid);
+        last_rule_handle_map.delete(&tid);
     }
 
     return 0;
@@ -337,11 +341,15 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
     // Extract rule_handle FIRST to determine if this is a new rule
     u64 rule_handle = extract_rule_handle(expr);
 
+    // Get last seen rule_handle for this tid
+    u64 *last_handle_ptr = last_rule_handle_map.lookup(&tid);
+    u64 last_handle = last_handle_ptr ? *last_handle_ptr : 0;
+
     // Only increment rule_seq when we encounter a NEW rule
     // (rule_handle is valid and different from the last one we saw)
-    if (rule_handle > 0 && rule_handle != stored->last_rule_handle) {
+    if (rule_handle > 0 && rule_handle != last_handle) {
         stored->rule_seq++;
-        stored->last_rule_handle = rule_handle;  // Update last seen rule_handle
+        last_rule_handle_map.update(&tid, &rule_handle);  // Update last seen rule_handle
     }
 
     s32 verdict_code = 0;

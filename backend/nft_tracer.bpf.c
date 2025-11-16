@@ -48,13 +48,13 @@ struct skb_info {
     u32 dst_ip;
     u16 src_port;
     u16 dst_port;
-    u64 last_rule_handle;  // Track last seen rule_handle to detect new rules
 };
 
 // BCC Macros for maps
 BPF_PERF_OUTPUT(events);
 BPF_HASH(skb_map, u64, struct skb_info, 10240);
 BPF_HASH(depth_map, u64, u8, 10240);
+BPF_HASH(last_rule_handle_map, u64, u64, 10240);  // Track last seen rule_handle per tid
 
 // Helper functions
 static __always_inline u32 decode_verdict(s32 raw_ret, u32 raw_u32)
@@ -223,10 +223,13 @@ int kprobe__nft_do_chain(struct pt_regs *ctx)
     info.dst_ip = 0;
     info.src_port = 0;
     info.dst_port = 0;
-    info.last_rule_handle = 0;  // Initialize last_rule_handle
 
     extract_packet_info(pkt, &info);
     skb_map.update(&tid, &info);
+
+    // Initialize last_rule_handle for this tid
+    u64 init_handle = 0;
+    last_rule_handle_map.update(&tid, &init_handle);
 
     return 0;
 }
@@ -286,6 +289,7 @@ int kretprobe__nft_do_chain(struct pt_regs *ctx)
     } else {
         skb_map.delete(&tid);
         depth_map.delete(&tid);
+        last_rule_handle_map.delete(&tid);
     }
 
     return 0;
@@ -310,11 +314,15 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
     // Extract rule_handle FIRST to determine if this is a new rule
     u64 rule_handle = extract_rule_handle(expr);
 
+    // Get last seen rule_handle for this tid
+    u64 *last_handle_ptr = last_rule_handle_map.lookup(&tid);
+    u64 last_handle = last_handle_ptr ? *last_handle_ptr : 0;
+
     // Only increment rule_seq when we encounter a NEW rule
     // (rule_handle is valid and different from the last one we saw)
-    if (rule_handle > 0 && rule_handle != info->last_rule_handle) {
+    if (rule_handle > 0 && rule_handle != last_handle) {
         info->rule_seq++;
-        info->last_rule_handle = rule_handle;  // Update last seen rule_handle
+        last_rule_handle_map.update(&tid, &rule_handle);  // Update last seen rule_handle
     }
 
     s32 verdict_code = 0;
