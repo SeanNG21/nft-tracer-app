@@ -21,6 +21,7 @@ from flask_cors import CORS
 import psutil
 
 from btf_skb_discoverer import BTFSKBDiscoverer
+from nftables_manager import NFTablesManager
 
 try:
     from bcc import BPF
@@ -1457,6 +1458,150 @@ def get_packet_detail(filename, packet_index):
         return jsonify({'error': 'Packet not found'}), 404
 
     return jsonify(packet_detail)
+
+# ============================================================================
+# NFTABLES MANAGEMENT ROUTES
+# ============================================================================
+
+@app.route('/api/nft/health', methods=['GET'])
+def nft_health():
+    """Check if nftables is available"""
+    available, message = NFTablesManager.check_nft_available()
+    return jsonify({
+        'available': available,
+        'message': message
+    })
+
+@app.route('/api/nft/rules', methods=['GET'])
+def get_nft_rules():
+    """Get complete nftables ruleset"""
+    success, ruleset, error = NFTablesManager.get_ruleset()
+
+    if not success:
+        return jsonify({'error': error}), 500
+
+    # Parse ruleset into tree structure for easier frontend consumption
+    tree = NFTablesManager.parse_ruleset_to_tree(ruleset)
+
+    return jsonify({
+        'success': True,
+        'raw_ruleset': ruleset,
+        'tree': tree
+    })
+
+@app.route('/api/nft/tables', methods=['GET'])
+def get_nft_tables():
+    """Get list of all nftables tables"""
+    success, tables, error = NFTablesManager.get_tables()
+
+    if not success:
+        return jsonify({'error': error}), 500
+
+    return jsonify({
+        'success': True,
+        'tables': tables
+    })
+
+@app.route('/api/nft/chains/<family>/<table>', methods=['GET'])
+def get_nft_chains(family, table):
+    """Get chains for a specific table"""
+    success, chains, error = NFTablesManager.get_chains(family, table)
+
+    if not success:
+        return jsonify({'error': error}), 500
+
+    return jsonify({
+        'success': True,
+        'chains': chains
+    })
+
+@app.route('/api/nft/rule/add', methods=['POST'])
+def add_nft_rule():
+    """Add a new nftables rule"""
+    data = request.get_json()
+
+    family = data.get('family')
+    table = data.get('table')
+    chain = data.get('chain')
+    rule_text = data.get('rule_text')
+
+    if not all([family, table, chain, rule_text]):
+        return jsonify({
+            'success': False,
+            'error': 'Missing required parameters: family, table, chain, rule_text'
+        }), 400
+
+    success, error = NFTablesManager.add_rule(family, table, chain, rule_text)
+
+    if not success:
+        return jsonify({
+            'success': False,
+            'error': error
+        }), 500
+
+    return jsonify({
+        'success': True,
+        'message': 'Rule added successfully'
+    })
+
+@app.route('/api/nft/rule/delete', methods=['POST'])
+def delete_nft_rule():
+    """Delete an nftables rule by handle"""
+    data = request.get_json()
+
+    family = data.get('family')
+    table = data.get('table')
+    chain = data.get('chain')
+    handle = data.get('handle')
+
+    if not all([family, table, chain]) or handle is None:
+        return jsonify({
+            'success': False,
+            'error': 'Missing required parameters: family, table, chain, handle'
+        }), 400
+
+    success, error = NFTablesManager.delete_rule(family, table, chain, handle)
+
+    if not success:
+        return jsonify({
+            'success': False,
+            'error': error
+        }), 500
+
+    return jsonify({
+        'success': True,
+        'message': 'Rule deleted successfully'
+    })
+
+@app.route('/api/nft/rule/update', methods=['POST'])
+def update_nft_rule():
+    """Update an nftables rule (delete + add)"""
+    data = request.get_json()
+
+    family = data.get('family')
+    table = data.get('table')
+    chain = data.get('chain')
+    handle = data.get('handle')
+    new_rule_text = data.get('new_rule_text')
+
+    if not all([family, table, chain, new_rule_text]) or handle is None:
+        return jsonify({
+            'success': False,
+            'error': 'Missing required parameters: family, table, chain, handle, new_rule_text'
+        }), 400
+
+    success, error = NFTablesManager.update_rule(family, table, chain, handle, new_rule_text)
+
+    if not success:
+        return jsonify({
+            'success': False,
+            'error': error
+        }), 500
+
+    return jsonify({
+        'success': True,
+        'message': 'Rule updated successfully'
+    })
 
 # ============================================================================
 # MAIN
