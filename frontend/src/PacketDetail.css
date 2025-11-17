@@ -481,6 +481,24 @@
   border-left-color: #4caf50;
 }
 
+/* NFT Event Items */
+.event-item.nft-event-rule_eval {
+  border-left-color: #ff5722;
+}
+
+.event-item.nft-event-chain_exit {
+  border-left-color: #e91e63;
+}
+
+.event-item.nft-event-hook_exit {
+  border-left-color: #ffeb3b;
+}
+
+.badge-nft {
+  background-color: #e91e63;
+  color: white;
+}
+
 .event-header {
   display: flex;
   justify-content: space-between;
@@ -509,6 +527,55 @@
 
 .event-details strong {
   color: #e0e0e0;
+}
+
+/* NFT Event Sub-tabs */
+.nft-event-tabs {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 15px;
+  padding: 10px;
+  background-color: #252525;
+  border-radius: 4px;
+}
+
+.nft-tab {
+  padding: 8px 16px;
+  background-color: #1a1a1a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #999;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.nft-tab:hover {
+  background-color: #2a2a2a;
+  color: #e0e0e0;
+  border-color: #666;
+}
+
+.nft-tab.active {
+  background-color: #e91e63;
+  color: white;
+  border-color: #e91e63;
+}
+
+.badge.branch {
+  background-color: #673ab7;
+  color: white;
+}
+
+.verdict-dot.verdict-stolen,
+.verdict-dot.verdict-queue {
+  background-color: #9c27b0;
+}
+
+.badge.verdict-continue {
+  background-color: #2196f3;
+  color: white;
 }
 
 /* No Data */

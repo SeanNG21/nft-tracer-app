@@ -2129,10 +2129,10 @@ class TraceAnalyzer:
         if 'skb' in filters and filters['skb']:
             filtered = [t for t in filtered if filters['skb'].lower() in str(t.get('skb_addr', '')).lower()]
 
-        # Filter by hook
+        # Filter by hook or branch
         if 'hook' in filters and filters['hook']:
             hook = filters['hook'].upper()
-            filtered = [t for t in filtered if t.get('hook_name') == hook]
+            filtered = [t for t in filtered if t.get('hook_name') == hook or t.get('branch') == hook]
 
         # Filter by final verdict
         if 'verdict' in filters and filters['verdict']:
@@ -2146,7 +2146,8 @@ class TraceAnalyzer:
                 # Check final verdict
                 if trace.get('final_verdict') == verdict:
                     return True
-                # Check important_events for intermediate verdicts
+
+                # Check important_events for intermediate verdicts (old format)
                 events = trace.get('important_events', [])
                 for event in events:
                     # Check verdict in different event types
@@ -2161,6 +2162,14 @@ class TraceAnalyzer:
                                           -1: 'JUMP', -2: 'GOTO', -3: 'RETURN'}
                             if verdict_map.get(event_verdict, '').upper() == verdict:
                                 return True
+
+                # Check nft_events for intermediate verdicts (new format)
+                nft_events = trace.get('nft_events', [])
+                for event in nft_events:
+                    event_verdict = event.get('verdict')
+                    if event_verdict and isinstance(event_verdict, str) and event_verdict.upper() == verdict:
+                        return True
+
                 return False
             filtered = [t for t in filtered if has_verdict(t)]
 
@@ -2215,7 +2224,43 @@ class TraceAnalyzer:
             'flow_summary': []
         }
 
-        # Analyze verdict changes
+        # Analyze verdict changes from nft_events (new format)
+        nft_events = packet.get('nft_events', [])
+        for event in nft_events:
+            trace_type = event.get('trace_type')
+
+            if trace_type in ['chain_exit', 'hook_exit']:
+                verdict_info = {
+                    'timestamp': event.get('timestamp'),
+                    'type': trace_type,
+                    'verdict': event.get('verdict'),
+                    'hook': event.get('hook'),
+                    'chain_addr': event.get('chain_addr'),
+                    'chain_depth': event.get('chain_depth')
+                }
+                analysis['verdict_chain'].append(verdict_info)
+
+                # Check for JUMP/GOTO (verdicts with negative codes)
+                if event.get('verdict') in ['JUMP', 'GOTO']:
+                    analysis['jump_goto_chain'].append({
+                        'source_chain': event.get('chain_addr'),
+                        'verdict_type': event.get('verdict')
+                    })
+
+            elif trace_type == 'rule_eval':
+                # Track rule evaluation with verdict
+                if event.get('verdict'):
+                    verdict_info = {
+                        'timestamp': event.get('timestamp'),
+                        'type': 'rule_eval',
+                        'verdict': event.get('verdict'),
+                        'rule_seq': event.get('rule_seq'),
+                        'rule_handle': event.get('rule_handle'),
+                        'chain_depth': event.get('chain_depth')
+                    }
+                    analysis['verdict_chain'].append(verdict_info)
+
+        # Also check important_events (old format) for backward compatibility
         events = packet.get('important_events', [])
         for event in events:
             trace_type = event.get('trace_type')
@@ -2238,10 +2283,6 @@ class TraceAnalyzer:
                         'target_chain': event.get('target_chain'),
                         'verdict_type': event.get('verdict_str')
                     })
-
-            elif trace_type == 'rule_eval':
-                # Track rule evaluation
-                pass
 
         # Determine drop reason
         final_verdict = packet.get('final_verdict')
