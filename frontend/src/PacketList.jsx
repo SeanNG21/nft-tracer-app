@@ -273,8 +273,12 @@ const PacketList = ({
                 <th onClick={() => handleSort('verdict_changes')}>
                   Changes {sortField === 'verdict_changes' && (sortDirection === 'asc' ? '↑' : '↓')}
                 </th>
-                <th>Functions</th>
-                <th>SKB</th>
+                <th onClick={() => handleSort('unique_functions')}>
+                  Functions/Events {sortField === 'unique_functions' && (sortDirection === 'asc' ? '↑' : '↓')}
+                </th>
+                <th onClick={() => handleSort('unique_layers')}>
+                  Layers {sortField === 'unique_layers' && (sortDirection === 'asc' ? '↑' : '↓')}
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -320,10 +324,14 @@ const PacketList = ({
                       )}
                     </td>
                     <td className="functions">
-                      {packet.unique_functions} / {packet.total_functions_called}
+                      <span title={`${packet.unique_functions || 0} unique functions, ${packet.all_events_count || packet.total_events || 0} total events`}>
+                        {packet.unique_functions || 0} / {packet.all_events_count || packet.total_events || 0}
+                      </span>
                     </td>
-                    <td className="skb" title={packet.skb_addr}>
-                      {packet.skb_addr?.substring(0, 10)}...
+                    <td className="layers">
+                      <span title={`Unique layers: ${packet.unique_layers || 0}`}>
+                        {packet.unique_layers || 0} layers
+                      </span>
                     </td>
                   </tr>
                 ))

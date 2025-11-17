@@ -102,8 +102,12 @@ const PacketDetail = ({ packet, onClose }) => {
           <span>{packet.unique_functions ?? 0}</span>
         </div>
         <div className="info-item">
-          <label>Total Functions Called</label>
-          <span>{packet.total_functions_called ?? 0}</span>
+          <label>Unique Layers</label>
+          <span>{packet.unique_layers ?? 0}</span>
+        </div>
+        <div className="info-item">
+          <label>Total Events</label>
+          <span>{packet.all_events_count ?? packet.total_events ?? 0}</span>
         </div>
         <div className="info-item">
           <label>Rules Evaluated</label>
@@ -121,6 +125,21 @@ const PacketDetail = ({ packet, onClose }) => {
           <span>{packet.all_events_count}</span>
         </div>
       </div>
+
+      {/* Layer Counts Section */}
+      {packet.layer_counts && Object.keys(packet.layer_counts).length > 0 && (
+        <div className="layer-counts-section">
+          <h5>Layer Distribution</h5>
+          <div className="layer-counts-grid">
+            {Object.entries(packet.layer_counts).map(([layer, count]) => (
+              <div key={layer} className="layer-count-item">
+                <span className="layer-name">{layer}</span>
+                <span className="layer-count badge">{count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -236,10 +255,10 @@ const PacketDetail = ({ packet, onClose }) => {
   // Render all events
   const renderEvents = () => (
     <div className="detail-section">
-      <h4>All Events ({packet.important_events?.length || 0})</h4>
+      <h4>All Events ({packet.all_events?.length || packet.all_events_count || 0})</h4>
       <div className="events-list">
-        {packet.important_events && packet.important_events.length > 0 ? (
-          packet.important_events.map((event, idx) => (
+        {packet.all_events && packet.all_events.length > 0 ? (
+          packet.all_events.map((event, idx) => (
             <div key={idx} className={`event-item event-${event.trace_type}`}>
               <div className="event-header">
                 <span className="event-type badge">{event.trace_type}</span>
@@ -249,29 +268,42 @@ const PacketDetail = ({ packet, onClose }) => {
                 {event.trace_type === 'function_call' && (
                   <>
                     <span><strong>Function:</strong> {event.function}</span>
+                    {event.layer && <span><strong>Layer:</strong> {event.layer}</span>}
+                    {event.direction && <span><strong>Direction:</strong> {event.direction}</span>}
                     <span><strong>CPU:</strong> {event.cpu_id}</span>
-                    <span><strong>Length:</strong> {event.length}</span>
+                    {event.length && <span><strong>Length:</strong> {event.length}</span>}
                     {event.comm && <span><strong>Comm:</strong> {event.comm}</span>}
                   </>
                 )}
                 {event.trace_type === 'chain_exit' && (
                   <>
-                    <span><strong>Verdict:</strong> {event.verdict_str}</span>
-                    <span><strong>Chain:</strong> {event.chain_name}</span>
-                    {event.table_name && <span><strong>Table:</strong> {event.table_name}</span>}
-                    {event.hook_name && <span><strong>Hook:</strong> {event.hook_name}</span>}
+                    <span><strong>Verdict:</strong> {event.verdict || event.verdict_str || 'N/A'}</span>
+                    <span><strong>Verdict Code:</strong> {event.verdict_code ?? 'N/A'}</span>
+                    {event.chain_depth !== undefined && <span><strong>Chain Depth:</strong> {event.chain_depth}</span>}
+                    {event.chain_addr && <span><strong>Chain Addr:</strong> {event.chain_addr}</span>}
+                    {event.hook !== undefined && <span><strong>Hook:</strong> {event.hook}</span>}
+                    <span><strong>CPU:</strong> {event.cpu_id}</span>
+                    {event.comm && <span><strong>Comm:</strong> {event.comm}</span>}
                   </>
                 )}
                 {event.trace_type === 'hook_exit' && (
                   <>
-                    <span><strong>Verdict:</strong> {event.verdict_str}</span>
-                    <span><strong>Hook:</strong> {event.hook_name}</span>
+                    <span><strong>Verdict:</strong> {event.verdict || event.verdict_str || 'N/A'}</span>
+                    {event.hook !== undefined && <span><strong>Hook:</strong> {event.hook}</span>}
+                    <span><strong>CPU:</strong> {event.cpu_id}</span>
+                    {event.comm && <span><strong>Comm:</strong> {event.comm}</span>}
                   </>
                 )}
                 {event.trace_type === 'rule_eval' && (
                   <>
-                    <span><strong>Rule ID:</strong> {event.rule_id}</span>
-                    {event.verdict_str && <span><strong>Verdict:</strong> {event.verdict_str}</span>}
+                    <span><strong>Rule Seq:</strong> {event.rule_seq ?? 'N/A'}</span>
+                    <span><strong>Rule Handle:</strong> {event.rule_handle ?? event.rule_id ?? 'N/A'}</span>
+                    {event.verdict && <span><strong>Verdict:</strong> {event.verdict}</span>}
+                    <span><strong>Verdict Code:</strong> {event.verdict_code ?? 'N/A'}</span>
+                    {event.chain_depth !== undefined && <span><strong>Chain Depth:</strong> {event.chain_depth}</span>}
+                    {event.hook !== undefined && <span><strong>Hook:</strong> {event.hook}</span>}
+                    <span><strong>CPU:</strong> {event.cpu_id}</span>
+                    {event.comm && <span><strong>Comm:</strong> {event.comm}</span>}
                   </>
                 )}
               </div>
