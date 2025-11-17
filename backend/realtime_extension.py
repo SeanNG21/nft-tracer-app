@@ -964,19 +964,20 @@ class SessionStatsTracker:
             total_in = layer_stats['packets_in']
             drops = layer_stats['verdict_breakdown'].get('DROP', 0)
             layer_stats['drop_rate'] = (drops / total_in * 100) if total_in > 0 else 0.0
-            
-            # Add to recent events
-            self.recent_events.append({
-                'type': 'nft' if func_name == 'nft_do_chain' else 'trace',
-                'hook_name': hook_name,
-                'func_name': func_name,
-                'verdict_name': verdict_name,
-                'protocol': protocol,
-                'src_ip': src_ip,
-                'dst_ip': dst_ip,
-                'timestamp': time.time()
-            })
-            
+
+            # Add to recent events (skip for multifunction - only aggregated stats)
+            if not is_multifunction:
+                self.recent_events.append({
+                    'type': 'nft' if func_name == 'nft_do_chain' else 'trace',
+                    'hook_name': hook_name,
+                    'func_name': func_name,
+                    'verdict_name': verdict_name,
+                    'protocol': protocol,
+                    'src_ip': src_ip,
+                    'dst_ip': dst_ip,
+                    'timestamp': time.time()
+                })
+
             # Update total packets (count unique packets, not events)
             self.total_packets = max(self.total_packets, sum(h['packets_total'] for h in self.hooks.values()) // max(len(self.hooks), 1))
     
@@ -1074,15 +1075,17 @@ class SessionStatsTracker:
                 'total_events': self.total_events,
                 'uptime_seconds': uptime,
                 'packets_per_second': pps,
-                'hooks': hooks_dict,
-                'recent_events': list(self.recent_events)
+                'hooks': hooks_dict
             }
 
-            # Add multifunction-specific stats
+            # Add multifunction-specific stats (aggregated only, no individual events)
             if self.mode == 'multifunction':
                 stats['stats_by_layer'] = dict(self.stats_by_layer)
                 stats['stats_by_hook'] = dict(self.stats_by_hook)
                 stats['stats_by_verdict'] = dict(self.stats_by_verdict)
+            else:
+                # Only include recent_events for non-multifunction modes
+                stats['recent_events'] = list(self.recent_events)
 
             return stats
 
