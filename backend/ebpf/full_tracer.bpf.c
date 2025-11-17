@@ -124,53 +124,77 @@ static __always_inline void extract_packet_info_from_skb(void *skb, struct trace
 {
     if (!skb)
         return;
-    
+
     evt->skb_addr = (u64)skb;
-    
-    // Get length
+
+    // Get length from skb->len
     u32 len = 0;
     bpf_probe_read_kernel(&len, sizeof(len), (char *)skb + 0x88);
     evt->length = len;
-    
-    // Get IP header pointer
-    void *ip_header = NULL;
-    bpf_probe_read_kernel(&ip_header, sizeof(ip_header), (char *)skb + 0xd0);
-    
-    if (!ip_header)
+
+    // FIXED: Get IP header using head + network_header offset (correct method)
+    unsigned char *head = NULL;
+    u16 network_header = 0;
+    u16 transport_header = 0;
+
+    // Read head pointer and network_header offset from sk_buff
+    bpf_probe_read_kernel(&head, sizeof(head), (char *)skb + 0xd0);  // skb->head
+    bpf_probe_read_kernel(&network_header, sizeof(network_header), (char *)skb + 0xb6);  // skb->network_header
+    bpf_probe_read_kernel(&transport_header, sizeof(transport_header), (char *)skb + 0xb8);  // skb->transport_header
+
+    // Validate network_header (0xFFFF = not set, or offset too large)
+    if (!head || network_header == 0xFFFF || network_header > 4096)
         return;
-    
+
+    // Calculate IP header address
+    void *ip_header = (void *)(head + network_header);
+
     u8 ihl_version = 0;
     u8 protocol = 0;
     u32 saddr = 0;
     u32 daddr = 0;
-    
+
     bpf_probe_read_kernel(&ihl_version, sizeof(ihl_version), ip_header);
     u8 version = (ihl_version >> 4) & 0x0F;
-    
+
     if (version != 4)
         return;
-    
+
     bpf_probe_read_kernel(&protocol, sizeof(protocol), (char *)ip_header + 9);
     bpf_probe_read_kernel(&saddr, sizeof(saddr), (char *)ip_header + 12);
     bpf_probe_read_kernel(&daddr, sizeof(daddr), (char *)ip_header + 16);
-    
+
     evt->protocol = protocol;
     evt->src_ip = saddr;
     evt->dst_ip = daddr;
-    
-    // Extract ports
+
+    // Extract ports for TCP/UDP
     if (protocol == 6 || protocol == 17) {
-        u8 ihl = (ihl_version & 0x0F) * 4;
-        void *trans_header = (char *)ip_header + ihl;
-        
-        u16 sport = 0;
-        u16 dport = 0;
-        
-        bpf_probe_read_kernel(&sport, sizeof(sport), trans_header);
-        bpf_probe_read_kernel(&dport, sizeof(dport), (char *)trans_header + 2);
-        
-        evt->src_port = bpf_ntohs(sport);
-        evt->dst_port = bpf_ntohs(dport);
+        // Method 1: Use transport_header if available
+        if (transport_header != 0xFFFF && transport_header < 4096) {
+            void *trans_header = (void *)(head + transport_header);
+            u16 sport = 0;
+            u16 dport = 0;
+
+            bpf_probe_read_kernel(&sport, sizeof(sport), trans_header);
+            bpf_probe_read_kernel(&dport, sizeof(dport), (char *)trans_header + 2);
+
+            evt->src_port = bpf_ntohs(sport);
+            evt->dst_port = bpf_ntohs(dport);
+        } else {
+            // Method 2: Calculate from IP header + IHL
+            u8 ihl = (ihl_version & 0x0F) * 4;
+            void *trans_header = (char *)ip_header + ihl;
+
+            u16 sport = 0;
+            u16 dport = 0;
+
+            bpf_probe_read_kernel(&sport, sizeof(sport), trans_header);
+            bpf_probe_read_kernel(&dport, sizeof(dport), (char *)trans_header + 2);
+
+            evt->src_port = bpf_ntohs(sport);
+            evt->dst_port = bpf_ntohs(dport);
+        }
     }
 }
 
