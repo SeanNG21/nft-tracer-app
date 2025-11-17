@@ -21,7 +21,12 @@ class SKBFunction:
     priority: int  # 0=critical, 1=important, 2=optional
     params: List[str]
     return_type: str = None
-    
+    skb_param_positions: List[int] = None  # Which parameter positions have sk_buff (1-indexed)
+
+    def __post_init__(self):
+        if self.skb_param_positions is None:
+            self.skb_param_positions = []
+
     def __hash__(self):
         return hash(self.name)
 
@@ -115,36 +120,79 @@ class BTFSKBDiscoverer:
     
     def _parse_btf_output(self, btf_output: str):
         """Parse bpftool BTF output to find sk_buff functions"""
-        # Pattern: function_name(struct sk_buff *skb, ...)
-        pattern = r'^\s*(\w+)\s*\([^)]*struct\s+sk_buff\s*\*'
-        
+        # Enhanced parsing: find ALL functions with sk_buff parameters at any position
+        in_function = False
+        current_func = None
+        current_params = []
+
         for line in btf_output.split('\n'):
-            match = re.search(pattern, line)
-            if match:
-                func_name = match.group(1)
-                
-                # Extract parameters
-                params_match = re.search(r'\((.*?)\)', line)
-                params = []
-                if params_match:
-                    param_str = params_match.group(1)
-                    params = [p.strip() for p in param_str.split(',')]
-                
-                # Extract return type
-                ret_type = None
-                ret_match = re.match(r'^\s*(\w+(?:\s*\*)?\s+)', line)
-                if ret_match:
-                    ret_type = ret_match.group(1).strip()
-                
-                func = SKBFunction(
-                    name=func_name,
-                    type='kprobe',
-                    category='unknown',
-                    priority=2,
-                    params=params,
-                    return_type=ret_type
-                )
-                self.functions.add(func)
+            # Match function declaration: return_type function_name(
+            func_match = re.match(r'^\s*([a-zA-Z_]\w*(?:\s*\*)?)\s+([a-zA-Z_]\w+)\s*\(', line)
+            if func_match:
+                ret_type = func_match.group(1).strip()
+                func_name = func_match.group(2).strip()
+                current_func = func_name
+                current_params = []
+                in_function = True
+
+                # Check if params are on same line
+                if ')' in line:
+                    param_str = line[line.index('(') + 1:line.index(')')].strip()
+                    if param_str and param_str != 'void':
+                        current_params = [p.strip() for p in param_str.split(',')]
+                    in_function = False
+
+                    # Check if any param is sk_buff
+                    skb_positions = self._find_skb_param_positions(current_params)
+                    if skb_positions:
+                        func = SKBFunction(
+                            name=func_name,
+                            type='kprobe',
+                            category='unknown',
+                            priority=2,
+                            params=current_params,
+                            return_type=ret_type,
+                            skb_param_positions=skb_positions
+                        )
+                        self.functions.add(func)
+                continue
+
+            # Multi-line function parameters
+            if in_function:
+                # Collect parameters
+                if ')' in line:
+                    # End of function declaration
+                    param_part = line[:line.index(')')].strip()
+                    if param_part:
+                        current_params.append(param_part)
+                    in_function = False
+
+                    # Check if any param is sk_buff
+                    skb_positions = self._find_skb_param_positions(current_params)
+                    if skb_positions and current_func:
+                        func = SKBFunction(
+                            name=current_func,
+                            type='kprobe',
+                            category='unknown',
+                            priority=2,
+                            params=current_params,
+                            return_type=None,
+                            skb_param_positions=skb_positions
+                        )
+                        self.functions.add(func)
+                else:
+                    # Still in parameter list
+                    param = line.strip().rstrip(',')
+                    if param:
+                        current_params.append(param)
+
+    def _find_skb_param_positions(self, params: List[str]) -> List[int]:
+        """Find which parameter positions contain sk_buff (1-indexed)"""
+        positions = []
+        for i, param in enumerate(params, start=1):
+            if 'struct sk_buff' in param or 'sk_buff *' in param:
+                positions.append(i)
+        return positions
     
     def _discover_via_kallsyms(self):
         """Fallback: discover using kallsyms (less accurate)"""

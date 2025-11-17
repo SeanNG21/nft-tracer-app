@@ -59,6 +59,7 @@ except ImportError as e:
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 NFT_TRACER_PATH = os.path.join(os.path.dirname(__file__), "nft_tracer.bpf.c")
 FULL_TRACER_PATH = os.path.join(os.path.dirname(__file__), "full_tracer.bpf.c")
+MULTI_TRACER_PATH = os.path.join(os.path.dirname(__file__), "multi_function_tracer.bpf.c")
 FUNCTIONS_CACHE = os.path.join(os.path.dirname(__file__), "skb_functions.json")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -510,7 +511,7 @@ int trace_skb_func(struct pt_regs *ctx, struct sk_buff *skb) {
 # TRACE SESSION
 # ============================================================================
 class TraceSession:
-    """Manages trace session - supports nft, universal, full modes"""
+    """Manages trace session - supports nft, universal, full, multi modes"""
     
     def __init__(self, session_id: str, mode: str = "nft", pcap_filter: str = "", 
                  max_functions: int = 30):
@@ -524,6 +525,7 @@ class TraceSession:
         self.bpf_nft = None
         self.bpf_universal = None
         self.bpf_full = None
+        self.bpf_multi = None  # NEW: Multi-function tracer
         self.thread = None
         
         self.packet_traces: Dict[int, PacketTrace] = {}
@@ -553,7 +555,7 @@ class TraceSession:
     def start(self) -> bool:
         if not BCC_AVAILABLE:
             return False
-        
+
         try:
             if self.mode == 'nft':
                 return self._start_nft_only()
@@ -561,10 +563,12 @@ class TraceSession:
                 return self._start_universal_only()
             elif self.mode == 'full':
                 return self._start_full_mode()
+            elif self.mode == 'multi':
+                return self._start_multi_mode()
             else:
                 print(f"[ERROR] Unknown mode: {self.mode}")
                 return False
-                
+
         except Exception as e:
             print(f"[ERROR] Starting session: {e}")
             import traceback
@@ -704,7 +708,139 @@ class TraceSession:
             print(f"[✓] Universal mode started")
         
         return True
-    
+
+    def _start_multi_mode(self) -> bool:
+        """
+        MULTI MODE: Comprehensive network stack tracing + NFT verdicts
+        Traces 1000+ functions like pwru/cilium with integrated nft tracking
+        """
+        print("[*] Starting MULTI mode (Comprehensive: All Functions + NFT verdicts)...")
+
+        # Discover ALL SKB functions
+        if os.path.exists(FUNCTIONS_CACHE):
+            print("[*] Loading cached function list...")
+            with open(FUNCTIONS_CACHE, 'r') as f:
+                data = json.load(f)
+            all_funcs = data.get('functions', [])
+        else:
+            print("[*] Discovering ALL SKB functions via BTF...")
+            discoverer = BTFSKBDiscoverer()
+            all_funcs_objs = discoverer.discover_from_btf()
+            discoverer.export_json(FUNCTIONS_CACHE)
+            all_funcs = [asdict(f) for f in all_funcs_objs]
+
+        # Filter and sort
+        sorted_funcs = sorted(all_funcs, key=lambda x: (x['priority'], x['name']))
+        functions_to_trace = []
+
+        # Group by parameter position (for pwru-style multi-position attachment)
+        funcs_by_param_pos = {1: [], 2: [], 3: [], 4: [], 5: []}
+
+        for func in sorted_funcs:
+            func_name = func['name']
+            if is_blacklisted(func_name):
+                continue
+
+            functions_to_trace.append(func)
+
+            # Categorize by SKB parameter position
+            positions = func.get('skb_param_positions', [1])
+            if not positions:
+                positions = [1]  # Default to position 1
+
+            for pos in positions:
+                if 1 <= pos <= 5:
+                    funcs_by_param_pos[pos].append(func_name)
+
+            # Limit total functions if max_functions is set
+            if self.max_functions > 0 and len(functions_to_trace) >= self.max_functions:
+                break
+
+        self.functions = [f['name'] for f in functions_to_trace]
+        print(f"[*] Selected {len(self.functions)} functions to trace")
+        print(f"    - Priority 0 (Critical): {sum(1 for f in functions_to_trace if f['priority'] == 0)}")
+        print(f"    - Priority 1 (Important): {sum(1 for f in functions_to_trace if f['priority'] == 1)}")
+        print(f"    - Priority 2 (Optional): {sum(1 for f in functions_to_trace if f['priority'] == 2)}")
+
+        # Load BPF program
+        print(f"[*] Loading multi-function tracer from {MULTI_TRACER_PATH}...")
+        with open(MULTI_TRACER_PATH, 'r') as f:
+            bpf_code = f.read()
+
+        self.bpf_multi = BPF(text=bpf_code)
+
+        # Attach NFT-specific hooks first
+        print("[*] Attaching NFT hooks...")
+        nft_hooks_attached = 0
+        try:
+            self.bpf_multi.attach_kprobe(event="nft_do_chain", fn_name="kprobe__nft_do_chain")
+            self.bpf_multi.attach_kretprobe(event="nft_do_chain", fn_name="kretprobe__nft_do_chain")
+            nft_hooks_attached += 2
+
+            self.bpf_multi.attach_kprobe(event="nft_immediate_eval", fn_name="kprobe__nft_immediate_eval")
+            nft_hooks_attached += 1
+
+            self.bpf_multi.attach_kretprobe(event="nf_hook_slow", fn_name="kretprobe__nf_hook_slow")
+            nft_hooks_attached += 1
+
+            print(f"[✓] Attached {nft_hooks_attached} NFT hooks")
+        except Exception as e:
+            print(f"[!] Warning: NFT hooks failed - {e}")
+
+        # Attach generic SKB function tracers
+        # Use pwru-style multi-position attachment
+        print("[*] Attaching generic function tracers...")
+        attached_by_pos = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+
+        for func_name in self.functions:
+            # Find which parameter positions this function has SKB
+            func_data = next((f for f in functions_to_trace if f['name'] == func_name), None)
+            positions = func_data.get('skb_param_positions', [1]) if func_data else [1]
+            if not positions:
+                positions = [1]
+
+            # Try to attach at the first valid position
+            attached = False
+            for pos in positions:
+                if pos < 1 or pos > 5:
+                    continue
+
+                try:
+                    fn_name = f"kprobe_skb_{pos}"
+                    self.bpf_multi.attach_kprobe(event=func_name, fn_name=fn_name)
+                    attached_by_pos[pos] += 1
+                    attached = True
+                    break  # Only attach once per function
+                except Exception as e:
+                    continue  # Try next position
+
+            if not attached:
+                # Fallback: try position 1
+                try:
+                    self.bpf_multi.attach_kprobe(event=func_name, fn_name="kprobe_skb_1")
+                    attached_by_pos[1] += 1
+                except:
+                    pass  # Function not available in this kernel
+
+        total_attached = sum(attached_by_pos.values())
+        print(f"[✓] Attached {total_attached}/{len(self.functions)} functions")
+        print(f"    By parameter position: {dict(attached_by_pos)}")
+
+        # Open perf buffer and start polling
+        self.bpf_multi["events"].open_perf_buffer(self._handle_multi_event)
+
+        self.running = True
+        self.thread = threading.Thread(target=self._poll_multi_events)
+        self.thread.daemon = True
+        self.thread.start()
+
+        self.cleanup_thread = threading.Thread(target=self._cleanup_old_traces)
+        self.cleanup_thread.daemon = True
+        self.cleanup_thread.start()
+
+        print("[✓] MULTI MODE READY! Tracing comprehensive network stack + NFT verdicts")
+        return True
+
     def stop(self) -> str:
         self.running = False
         self.end_time = datetime.now()
@@ -736,7 +872,13 @@ class TraceSession:
                 self.bpf_full.cleanup()
             except:
                 pass
-        
+
+        if hasattr(self, 'bpf_multi') and self.bpf_multi:
+            try:
+                self.bpf_multi.cleanup()
+            except:
+                pass
+
         return output_path
     
     def _poll_nft_events(self):
@@ -765,7 +907,17 @@ class TraceSession:
                 if self.running:
                     print(f"[ERROR] FULL mode polling: {e}")
                 break
-    
+
+    def _poll_multi_events(self):
+        """Poll events from MULTI mode tracer"""
+        while self.running:
+            try:
+                self.bpf_multi.perf_buffer_poll(timeout=100)
+            except Exception as e:
+                if self.running:
+                    print(f"[ERROR] MULTI mode polling: {e}")
+                break
+
     def _cleanup_old_traces(self):
         while self.running:
             time.sleep(2)
@@ -915,7 +1067,129 @@ class TraceSession:
                     if skb_addr in self.packet_traces:
                         self.completed_traces.append(trace)
                         del self.packet_traces[skb_addr]
-    
+
+    def _handle_multi_event(self, cpu, data, size):
+        """
+        Handle MULTI mode event - same as FULL mode but with comprehensive function coverage
+        Uses same event structure as full_tracer.bpf.c
+        """
+        import ctypes as ct
+
+        # Same event structure as FULL mode
+        class MultiEvent(ct.Structure):
+            _fields_ = [
+                ("timestamp", ct.c_ulonglong), ("skb_addr", ct.c_ulonglong),
+                ("cpu_id", ct.c_uint), ("pid", ct.c_uint),
+                ("event_type", ct.c_ubyte),
+                # packet_meta struct (inline)
+                ("meta_src_ip", ct.c_uint), ("meta_dst_ip", ct.c_uint),
+                ("meta_src_port", ct.c_ushort), ("meta_dst_port", ct.c_ushort),
+                ("meta_protocol", ct.c_ubyte), ("meta_hook", ct.c_ubyte),
+                ("meta_pf", ct.c_ubyte), ("meta_flags", ct.c_ubyte),
+                ("meta_length", ct.c_uint), ("meta_mark", ct.c_uint),
+                ("meta_ifindex", ct.c_uint),
+                # NFT fields
+                ("chain_addr", ct.c_ulonglong), ("expr_addr", ct.c_ulonglong),
+                ("chain_depth", ct.c_ubyte), ("rule_seq", ct.c_ushort),
+                ("rule_handle", ct.c_ulonglong),
+                # Verdict
+                ("verdict_raw", ct.c_int), ("verdict", ct.c_uint),
+                ("queue_num", ct.c_ushort), ("has_queue_bypass", ct.c_ubyte),
+                # Function tracking
+                ("func_ip", ct.c_ulonglong), ("stack_id", ct.c_longlong),
+                ("param_second", ct.c_ulonglong),
+                ("comm", ct.c_char * 16),
+            ]
+
+        event = ct.cast(data, ct.POINTER(MultiEvent)).contents
+
+        with self.lock:
+            self.total_events += 1
+            self._update_stats()
+
+            skb_addr = event.skb_addr if event.skb_addr != 0 else event.chain_addr
+            if skb_addr == 0:
+                return
+
+            if skb_addr not in self.packet_traces:
+                self.packet_traces[skb_addr] = PacketTrace(
+                    skb_addr=skb_addr, first_seen=event.timestamp,
+                    last_seen=event.timestamp, events=[], mode="multi"
+                )
+
+            trace = self.packet_traces[skb_addr]
+
+            # EVENT_TYPE_FUNCTION_CALL = 0
+            if event.event_type == 0:
+                func_name = kallsyms.lookup(event.func_ip)
+                if not func_name:
+                    func_name = f"unknown_{hex(event.func_ip)}"
+
+                self.events_by_func[func_name] += 1
+
+                universal_event = UniversalEvent(
+                    timestamp=event.timestamp, cpu_id=event.cpu_id, pid=event.pid,
+                    skb_addr=event.skb_addr, func_name=func_name,
+                    protocol=event.meta_protocol, src_ip=event.meta_src_ip, dst_ip=event.meta_dst_ip,
+                    src_port=event.meta_src_port, dst_port=event.meta_dst_port,
+                    length=event.meta_length, comm=event.comm.decode('utf-8', errors='ignore')
+                )
+                trace.add_universal_event(universal_event)
+
+                # Realtime integration
+                if REALTIME_AVAILABLE and realtime:
+                    try:
+                        realtime.process_session_event({
+                            'hook': event.meta_hook,
+                            'func_name': func_name,
+                            'verdict': event.verdict,
+                            'protocol': event.meta_protocol,
+                            'src_ip': trace._format_ip(event.meta_src_ip),
+                            'dst_ip': trace._format_ip(event.meta_dst_ip),
+                            'timestamp': time.time()
+                        }, self.session_id)
+                    except:
+                        pass
+
+            # EVENT_TYPE_NFT_CHAIN = 1, EVENT_TYPE_NFT_RULE = 2, EVENT_TYPE_NF_VERDICT = 3
+            elif event.event_type in [1, 2, 3]:
+                nft_event = NFTEvent(
+                    timestamp=event.timestamp, cpu_id=event.cpu_id, pid=event.pid,
+                    skb_addr=event.skb_addr, chain_addr=event.chain_addr,
+                    expr_addr=event.expr_addr, regs_addr=0,
+                    hook=event.meta_hook, chain_depth=event.chain_depth,
+                    trace_type=event.event_type - 1, pf=event.meta_pf,
+                    verdict=event.verdict, verdict_raw=event.verdict_raw,
+                    queue_num=event.queue_num, rule_seq=event.rule_seq,
+                    has_queue_bypass=event.has_queue_bypass, protocol=event.meta_protocol,
+                    src_ip=event.meta_src_ip, dst_ip=event.meta_dst_ip,
+                    src_port=event.meta_src_port, dst_port=event.meta_dst_port,
+                    rule_handle=event.rule_handle,
+                    comm=event.comm.decode('utf-8', errors='ignore')
+                )
+                trace.add_nft_event(nft_event)
+
+                # Realtime integration
+                if REALTIME_AVAILABLE and realtime:
+                    try:
+                        realtime.process_session_event({
+                            'hook': event.meta_hook,
+                            'func_name': 'nft_do_chain',
+                            'verdict': event.verdict,
+                            'protocol': event.meta_protocol,
+                            'src_ip': trace._format_ip(event.meta_src_ip),
+                            'dst_ip': trace._format_ip(event.meta_dst_ip),
+                            'timestamp': time.time()
+                        }, self.session_id)
+                    except:
+                        pass
+
+                # Complete trace on final verdict
+                if event.event_type == 1 and event.verdict in [0, 1]:
+                    if skb_addr in self.packet_traces:
+                        self.completed_traces.append(trace)
+                        del self.packet_traces[skb_addr]
+
     def _handle_universal_event(self, cpu, data, size):
         event = self.bpf_universal["events"].event(data)
         func_name = kallsyms.lookup(event.func_ip)
@@ -1125,8 +1399,8 @@ def create_session():
     session_id = data.get('session_id', f"trace_{int(time.time() * 1000)}")
     mode = data.get('mode', 'nft')
     
-    if mode not in ['nft', 'universal', 'full']:
-        return jsonify({'error': 'Invalid mode. Use: nft, universal, or full'}), 400
+    if mode not in ['nft', 'universal', 'full', 'multi']:
+        return jsonify({'error': 'Invalid mode. Use: nft, universal, full, or multi'}), 400
     
     success = session_manager.create_session(
         session_id, mode, data.get('pcap_filter', ''), data.get('max_functions', 30)
