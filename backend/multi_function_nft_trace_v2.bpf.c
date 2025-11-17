@@ -471,6 +471,48 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
     return 0;
 }
 
+// Track hook state when entering nf_hook_slow
+// nf_hook_slow(struct sk_buff *skb, struct nf_hook_state *state, ...)
+int kprobe__nf_hook_slow(struct pt_regs *ctx)
+{
+    void *skb = (void *)PT_REGS_PARM1(ctx);
+    void *state = (void *)PT_REGS_PARM2(ctx);
+
+    if (!skb || !state)
+        return 0;
+
+    u64 skb_addr = (u64)skb;
+
+    // Extract hook and pf from nf_hook_state
+    u8 hook = 255;
+    u8 pf = 0;
+    bpf_probe_read_kernel(&hook, sizeof(hook), state);          // offset 0
+    bpf_probe_read_kernel(&pf, sizeof(pf), (char *)state + 1);  // offset 1
+
+    // Get or create packet info
+    struct packet_info *pkt = packet_map.lookup(&skb_addr);
+    struct packet_info new_pkt = {};
+
+    if (!pkt) {
+        new_pkt.skb_addr = skb_addr;
+        new_pkt.first_seen = bpf_ktime_get_ns();
+        new_pkt.function_count = 0;
+        extract_packet_info((struct sk_buff *)skb, &new_pkt);
+        pkt = &new_pkt;
+    }
+
+    // Update hook state
+    pkt->hook = hook;
+    pkt->pf = pf;
+    packet_map.update(&skb_addr, pkt);
+
+    // Also save to tid_map for kretprobe
+    u64 tid = bpf_get_current_pid_tgid();
+    tid_map.update(&tid, pkt);
+
+    return 0;
+}
+
 int kretprobe__nf_hook_slow(struct pt_regs *ctx)
 {
     u64 tid = bpf_get_current_pid_tgid();
