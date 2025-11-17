@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import RealtimeView from './RealtimeView';
-import MultiFunctionView from './MultiFunctionView';
 import SessionRealtimeStats from './SessionRealtimeStats';
 import TraceViewer from './TraceViewer';
 import './App.css';
@@ -254,12 +253,6 @@ function App() {
             onClick={() => setActiveTab('realtime')}
           >
             🎥 Realtime
-          </button>
-          <button
-            className={`tab ${activeTab === 'multifunction' ? 'active' : ''}`}
-            onClick={() => setActiveTab('multifunction')}
-          >
-            🔬 Multi-Function
           </button>
           <button
             className={`tab ${activeTab === 'discovery' ? 'active' : ''}`}
@@ -584,9 +577,6 @@ function App() {
 
         {/* TAB: Realtime */}
         {activeTab === 'realtime' && <RealtimeView />}
-
-        {/* TAB: Multi-Function Tracer */}
-        {activeTab === 'multifunction' && <MultiFunctionView />}
 
         {/* TAB: Function Discovery */}
         {activeTab === 'discovery' && (
