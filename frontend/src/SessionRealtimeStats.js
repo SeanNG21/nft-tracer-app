@@ -160,6 +160,89 @@ function SessionRealtimeStats({ sessionId }) {
         </div>
       </div>
 
+      {/* Full Mode Pipeline Stats - NEW */}
+      {stats.mode === 'full' && stats.stats && (stats.stats.Inbound || stats.stats.Outbound) && (
+        <div className="pipeline-stats-container">
+          <h2 className="section-title">🔄 Packet Pipeline Flow</h2>
+
+          <div className="pipeline-grid">
+            {/* Inbound Pipeline */}
+            {stats.stats.Inbound && Object.keys(stats.stats.Inbound).length > 0 && (
+              <div className="pipeline-column inbound">
+                <div className="pipeline-header inbound">
+                  <span className="pipeline-icon">📥</span>
+                  <h3>Inbound Traffic</h3>
+                  <span className="pipeline-badge">
+                    {Object.values(stats.stats.Inbound).reduce((sum, val) => sum + val, 0).toLocaleString()} events
+                  </span>
+                </div>
+                <div className="pipeline-layers">
+                  {Object.entries(stats.stats.Inbound)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([layer, count]) => {
+                      const maxCount = Math.max(...Object.values(stats.stats.Inbound));
+                      const percentage = (count / maxCount) * 100;
+                      return (
+                        <div key={layer} className="pipeline-layer-item">
+                          <div className="layer-name-badge inbound">
+                            <span className="layer-dot">●</span>
+                            {layer}
+                          </div>
+                          <div className="layer-bar-container">
+                            <div
+                              className="layer-bar inbound"
+                              style={{ width: `${percentage}%` }}
+                            >
+                              <span className="layer-count">{count.toLocaleString()}</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+
+            {/* Outbound Pipeline */}
+            {stats.stats.Outbound && Object.keys(stats.stats.Outbound).length > 0 && (
+              <div className="pipeline-column outbound">
+                <div className="pipeline-header outbound">
+                  <span className="pipeline-icon">📤</span>
+                  <h3>Outbound Traffic</h3>
+                  <span className="pipeline-badge">
+                    {Object.values(stats.stats.Outbound).reduce((sum, val) => sum + val, 0).toLocaleString()} events
+                  </span>
+                </div>
+                <div className="pipeline-layers">
+                  {Object.entries(stats.stats.Outbound)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([layer, count]) => {
+                      const maxCount = Math.max(...Object.values(stats.stats.Outbound));
+                      const percentage = (count / maxCount) * 100;
+                      return (
+                        <div key={layer} className="pipeline-layer-item">
+                          <div className="layer-name-badge outbound">
+                            <span className="layer-dot">●</span>
+                            {layer}
+                          </div>
+                          <div className="layer-bar-container">
+                            <div
+                              className="layer-bar outbound"
+                              style={{ width: `${percentage}%` }}
+                            >
+                              <span className="layer-count">{count.toLocaleString()}</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Multifunction Stats Visualization */}
       {stats.mode === 'multifunction' && (stats.stats_by_layer || stats.stats_by_hook || stats.stats_by_verdict) && (
         <div className="multifunction-stats-container">
