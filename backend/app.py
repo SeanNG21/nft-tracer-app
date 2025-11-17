@@ -989,7 +989,9 @@ class TraceSession:
         self.stats_by_hook = defaultdict(int)
         self.stats_by_verdict = defaultdict(int)
 
-        self.trace_timeout_ns = 5 * 1_000_000_000
+        # FIX: Reduce timeout from 5s to 1s to prevent SKB address reuse
+        # Packets typically complete within milliseconds, so 1s is more than enough
+        self.trace_timeout_ns = 1 * 1_000_000_000
 
         print(f"[DEBUG] Session {session_id} created in {mode.upper()} mode")
         print(f"[DEBUG] Excluded ports (no self-tracing): {sorted(EXCLUDED_PORTS)}")
@@ -1423,9 +1425,11 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
             
             trace = self.packet_traces[skb_addr]
             trace.add_nft_event(nft_event)
-            
+
             if nft_event.trace_type == 0:
-                if nft_event.verdict in [0, 1]:
+                # FIX: Add STOLEN (2), QUEUE (3), STOP (5) to terminal verdicts
+                # These verdicts also end packet lifecycle and should cleanup immediately
+                if nft_event.verdict in [0, 1, 2, 3, 5]:  # DROP, ACCEPT, STOLEN, QUEUE, STOP
                     self.completed_traces.append(trace)
                     del self.packet_traces[skb_addr]
     
@@ -1543,8 +1547,9 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                     except Exception as e:
                         # Silent fail - don't break session if realtime fails
                         pass
-                
-                if event.event_type == 1 and event.verdict in [0, 1]:
+
+                # FIX: Add terminal verdicts to cleanup packet traces immediately
+                if event.event_type == 1 and event.verdict in [0, 1, 2, 3, 5]:  # DROP, ACCEPT, STOLEN, QUEUE, STOP
                     if skb_addr in self.packet_traces:
                         self.completed_traces.append(trace)
                         del self.packet_traces[skb_addr]
@@ -1683,8 +1688,9 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                 )
                 trace.add_nft_event(nft_event)
 
-                # Mark packet as complete on verdict
-                if event.event_type == 1 and event.verdict in [0, 1]:
+                # FIX: Mark packet as complete on terminal verdicts
+                # Include STOLEN (2), QUEUE (3), STOP (5) to prevent SKB address reuse
+                if event.event_type == 1 and event.verdict in [0, 1, 2, 3, 5]:  # DROP, ACCEPT, STOLEN, QUEUE, STOP
                     if skb_addr in self.packet_traces:
                         self.completed_traces.append(trace)
                         del self.packet_traces[skb_addr]
