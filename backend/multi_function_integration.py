@@ -180,8 +180,8 @@ def add_multi_function_routes(app, socketio=None):
         })
 
     @app.route('/api/multi-function/discover', methods=['POST'])
-    def discover_functions():
-        """Trigger function discovery"""
+    def multi_function_discover():
+        """Trigger function discovery for multi-function tracer"""
         try:
             data = request.get_json() or {}
             max_trace = data.get('max_trace', 50)
