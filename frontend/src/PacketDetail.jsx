@@ -87,10 +87,18 @@ const PacketDetail = ({ packet, onClose }) => {
           <label>Duration</label>
           <span>{formatDuration(packet.duration_ns)}</span>
         </div>
-        <div className="info-item">
-          <label>Hook</label>
-          <span className="badge hook">{packet.hook_name || 'N/A'}</span>
-        </div>
+        {/* Show branch for full mode, hook for other modes */}
+        {packet.branch ? (
+          <div className="info-item">
+            <label>Branch</label>
+            <span className="badge branch">{packet.branch}</span>
+          </div>
+        ) : (
+          <div className="info-item">
+            <label>Hook</label>
+            <span className="badge hook">{packet.hook_name || 'N/A'}</span>
+          </div>
+        )}
         <div className="info-item">
           <label>Final Verdict</label>
           <span className={`badge verdict verdict-${packet.final_verdict?.toLowerCase()}`}>
@@ -101,13 +109,16 @@ const PacketDetail = ({ packet, onClose }) => {
           <label>Unique Functions</label>
           <span>{packet.unique_functions ?? 0}</span>
         </div>
+        {/* Only show unique_layers if available (not in new simplified format) */}
+        {packet.unique_layers !== undefined && (
+          <div className="info-item">
+            <label>Unique Layers</label>
+            <span>{packet.unique_layers}</span>
+          </div>
+        )}
         <div className="info-item">
-          <label>Unique Layers</label>
-          <span>{packet.unique_layers ?? 0}</span>
-        </div>
-        <div className="info-item">
-          <label>Total Events</label>
-          <span>{packet.all_events_count ?? packet.total_events ?? 0}</span>
+          <label>{packet.total_functions_called !== undefined ? 'Total Functions Called' : 'Total Events'}</label>
+          <span>{packet.total_functions_called ?? packet.all_events_count ?? packet.total_events ?? 0}</span>
         </div>
         <div className="info-item">
           <label>Rules Evaluated</label>
@@ -253,18 +264,34 @@ const PacketDetail = ({ packet, onClose }) => {
   );
 
   // Render all events
-  const renderEvents = () => (
-    <div className="detail-section">
-      <h4>All Events ({packet.all_events?.length || packet.all_events_count || 0})</h4>
-      <div className="events-list">
-        {packet.all_events && packet.all_events.length > 0 ? (
-          packet.all_events.map((event, idx) => (
-            <div key={idx} className={`event-item event-${event.trace_type}`}>
+  const renderEvents = () => {
+    // Support both old format (all_events) and new format (events)
+    const eventsList = packet.events || packet.all_events || [];
+    const eventsCount = packet.all_events_count || eventsList.length || 0;
+
+    return (
+      <div className="detail-section">
+        <h4>All Events ({eventsCount})</h4>
+        <div className="events-list">
+          {eventsList.length > 0 ? (
+            eventsList.map((event, idx) => (
+            <div key={idx} className={`event-item event-${event.trace_type || 'function_call'}`}>
               <div className="event-header">
-                <span className="event-type badge">{event.trace_type}</span>
+                <span className="event-type badge">{event.trace_type || 'function_call'}</span>
                 <span className="event-time">{formatTimestamp(event.timestamp)}</span>
               </div>
               <div className="event-details">
+                {/* New simplified format (full mode) - has function but no trace_type */}
+                {(!event.trace_type && event.function) && (
+                  <>
+                    <span><strong>Function:</strong> {event.function}</span>
+                    {event.layer && <span><strong>Layer:</strong> {event.layer}</span>}
+                    <span><strong>CPU:</strong> {event.cpu_id}</span>
+                    {event.comm && <span><strong>Comm:</strong> {event.comm}</span>}
+                  </>
+                )}
+
+                {/* Old format with trace_type */}
                 {event.trace_type === 'function_call' && (
                   <>
                     <span><strong>Function:</strong> {event.function}</span>
@@ -314,7 +341,8 @@ const PacketDetail = ({ packet, onClose }) => {
         )}
       </div>
     </div>
-  );
+    );
+  };
 
   return (
     <div className="packet-detail">

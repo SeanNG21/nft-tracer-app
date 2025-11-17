@@ -647,8 +647,65 @@ class PacketTrace:
         return socket.inet_ntoa(ip.to_bytes(4, byteorder='little'))
     
     def to_summary(self) -> Dict:
-        """Export summary with NEW PIPELINE-ORGANIZED FORMAT"""
+        """Export summary - SIMPLIFIED FORMAT for full mode"""
         sorted_events = sorted(self.events, key=lambda x: x['timestamp'])
+
+        # For FULL mode: Use simplified format with only function calls
+        if self.mode == 'full':
+            # Extract only function_call events and simplify them
+            simplified_events = []
+            total_function_calls = 0
+
+            for event in sorted_events:
+                if event.get('trace_type') == 'function_call':
+                    total_function_calls += 1
+                    # Simplified event structure - only essential fields
+                    simplified_events.append({
+                        'timestamp': event['timestamp'],
+                        'function': event['function'],
+                        'layer': event['layer'],
+                        'cpu_id': event['cpu_id'],
+                        'comm': event['comm']
+                    })
+
+            # Determine branch based on direction and final stage
+            branch = "UNKNOWN"
+            if self.direction == "Inbound":
+                # Check if packet was locally delivered or forwarded
+                last_layers = [e.get('layer', '') for e in sorted_events[-3:]]
+                if any('INPUT' in layer or 'Local Delivery' in layer for layer in last_layers):
+                    branch = "LOCAL_DELIVERY"
+                elif any('FORWARD' in layer for layer in last_layers):
+                    branch = "FORWARD"
+                else:
+                    branch = "LOCAL_DELIVERY"  # Default for inbound
+            elif self.direction == "Outbound":
+                branch = "OUTPUT"
+
+            # Return simplified format
+            return {
+                'skb_addr': hex(self.skb_addr) if self.skb_addr > 0 else f"synthetic_{self.skb_addr}",
+                'protocol': self.protocol,
+                'protocol_name': self._protocol_name(self.protocol),
+                'src_ip': self.src_ip,
+                'dst_ip': self.dst_ip,
+                'src_port': self.src_port,
+                'dst_port': self.dst_port,
+                'first_seen': self.first_seen,
+                'last_seen': self.last_seen,
+                'duration_ns': self.last_seen - self.first_seen,
+                'branch': branch,
+                'functions_path': self.functions_called,
+                'unique_functions': self.unique_functions,
+                'total_functions_called': total_function_calls,
+                'final_verdict': self.final_verdict_str or "ACCEPT",
+                'total_rules_evaluated': self.total_rules_evaluated,
+                'verdict_changes': self.verdict_changes,
+                'events': simplified_events,
+                'all_events_count': len(simplified_events)
+            }
+
+        # For other modes (NFT, Universal, Multifunction): Keep full format
         function_events = []
         nft_events = []
 
@@ -675,17 +732,17 @@ class PacketTrace:
                 })
                 seen_layers.add(layer)
 
-        # NEW FORMAT for frontend visualization
+        # Full format for non-full modes
         return {
             # Packet identification
             'packet_id': hex(self.skb_addr) if self.skb_addr > 0 else f"synthetic_{self.skb_addr}",
             'skb_addr': hex(self.skb_addr) if self.skb_addr > 0 else f"synthetic_{self.skb_addr}",
 
-            # NEW: Direction and pipeline
+            # Direction and pipeline
             'direction': self.direction or 'Unknown',
             'pipeline': PIPELINE_STRUCTURE.get(self.direction, []) if self.direction else [],
-            'stages': sorted_stages,  # Full stage details sorted by time
-            'pipeline_summary': pipeline_summary,  # Layer-wise summary
+            'stages': sorted_stages,
+            'pipeline_summary': pipeline_summary,
 
             # Timing
             'first_seen': self.first_seen,
@@ -711,8 +768,8 @@ class PacketTrace:
             'layer_counts': dict(self.layer_counts),
             'unique_layers': len(seen_layers),
             'total_events': len(sorted_stages),
-            'functions_path': self.functions_called,  # Legacy
-            'unique_functions': self.unique_functions,  # Legacy
+            'functions_path': self.functions_called,
+            'unique_functions': self.unique_functions,
 
             # All events (for detailed analysis)
             'all_events': sorted_events,

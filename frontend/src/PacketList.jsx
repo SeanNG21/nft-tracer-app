@@ -274,10 +274,10 @@ const PacketList = ({
                   Changes {sortField === 'verdict_changes' && (sortDirection === 'asc' ? '↑' : '↓')}
                 </th>
                 <th onClick={() => handleSort('unique_functions')}>
-                  Functions/Events {sortField === 'unique_functions' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  Functions/Calls {sortField === 'unique_functions' && (sortDirection === 'asc' ? '↑' : '↓')}
                 </th>
-                <th onClick={() => handleSort('unique_layers')}>
-                  Layers {sortField === 'unique_layers' && (sortDirection === 'asc' ? '↑' : '↓')}
+                <th onClick={() => handleSort('branch')}>
+                  Branch/Layers {sortField === 'branch' && (sortDirection === 'asc' ? '↑' : '↓')}
                 </th>
               </tr>
             </thead>
@@ -324,14 +324,20 @@ const PacketList = ({
                       )}
                     </td>
                     <td className="functions">
-                      <span title={`${packet.unique_functions || 0} unique functions, ${packet.all_events_count || packet.total_events || 0} total events`}>
-                        {packet.unique_functions || 0} / {packet.all_events_count || packet.total_events || 0}
+                      <span title={`${packet.unique_functions || 0} unique functions, ${packet.total_functions_called || packet.all_events_count || packet.total_events || 0} total calls`}>
+                        {packet.unique_functions || 0} / {packet.total_functions_called || packet.all_events_count || packet.total_events || 0}
                       </span>
                     </td>
-                    <td className="layers">
-                      <span title={`Unique layers: ${packet.unique_layers || 0}`}>
-                        {packet.unique_layers || 0} layers
-                      </span>
+                    <td className="branch-or-layers">
+                      {packet.branch ? (
+                        <span className="badge branch-badge" title={`Branch: ${packet.branch}`}>
+                          {packet.branch}
+                        </span>
+                      ) : (
+                        <span title={`Unique layers: ${packet.unique_layers || 0}`}>
+                          {packet.unique_layers || 0} layers
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))
