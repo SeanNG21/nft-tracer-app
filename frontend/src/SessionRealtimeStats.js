@@ -17,6 +17,160 @@ const HOOK_ICONS = {
   'POST_ROUTING': '⚙️'
 };
 
+// NEW: Pipeline structure definitions for Enhanced Full Mode Visualization
+const PIPELINE_DEFINITIONS = {
+  Inbound: {
+    mainFlow: [
+      { name: 'NIC', icon: '📡', color: '#2196f3' },
+      { name: 'Driver (NAPI)', icon: '🚗', color: '#1976d2' },
+      { name: 'GRO', icon: '🔄', color: '#0d47a1' },
+      { name: 'TC Ingress', icon: '🚦', color: '#01579b' },
+      { name: 'Netfilter PREROUTING', icon: '🔧', color: '#006064' },
+      { name: 'Conntrack', icon: '🔗', color: '#00838f' },
+      { name: 'NAT PREROUTING', icon: '🔀', color: '#0097a7' },
+      { name: 'Routing Decision', icon: '🗺️', color: '#00acc1' },
+    ],
+    branches: {
+      'Local Delivery': [
+        { name: 'Netfilter INPUT', icon: '🛡️', color: '#4dd0e1' },
+        { name: 'TCP/UDP', icon: '📦', color: '#80deea' },
+        { name: 'Socket', icon: '🔌', color: '#b2ebf2' },
+      ],
+      'Forward': [
+        { name: 'Netfilter FORWARD', icon: '🔀', color: '#fb8c00' },
+        { name: 'Netfilter POSTROUTING', icon: '⚙️', color: '#f57c00' },
+        { name: 'NIC TX', icon: '📤', color: '#ef6c00' },
+      ]
+    }
+  },
+  Outbound: [
+    { name: 'Application', icon: '💻', color: '#4caf50' },
+    { name: 'TCP/UDP Output', icon: '📤', color: '#43a047' },
+    { name: 'Netfilter OUTPUT', icon: '🛡️', color: '#388e3c' },
+    { name: 'Routing Lookup', icon: '🗺️', color: '#2e7d32' },
+    { name: 'NAT POSTROUTING', icon: '⚙️', color: '#558b2f' },
+    { name: 'TC Egress', icon: '🚦', color: '#689f38' },
+    { name: 'Driver TX', icon: '🚗', color: '#7cb342' },
+    { name: 'NIC', icon: '📡', color: '#8bc34a' },
+  ]
+};
+
+// Enhanced Pipeline Node Component
+function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
+  const count = nodeData?.count || 0;
+  const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
+
+  // Create gradient background based on stage color
+  const gradientBg = isActive
+    ? `linear-gradient(135deg, ${stageDef.color} 0%, ${stageDef.color}dd 100%)`
+    : 'linear-gradient(135deg, #e0e0e0 0%, #c0c0c0 100%)';
+
+  // Verdict pie chart data for Netfilter nodes
+  const verdictData = nodeData?.verdict || null;
+  const isNetfilterNode = stageDef.name.includes('Netfilter');
+
+  return (
+    <div className="pipeline-node-wrapper">
+      <div
+        className={`pipeline-node ${isActive ? 'active' : 'inactive'}`}
+        style={{
+          background: gradientBg,
+          boxShadow: isActive
+            ? `0 4px 12px ${stageDef.color}60, 0 2px 4px ${stageDef.color}40`
+            : '0 2px 6px rgba(0,0,0,0.1)',
+          border: `2px solid ${isActive ? stageDef.color : '#bbb'}`,
+        }}
+      >
+        {/* Icon */}
+        <div className="node-icon">{stageDef.icon}</div>
+
+        {/* Name */}
+        <div className="node-name">{stageDef.name}</div>
+
+        {/* Count */}
+        {isActive && (
+          <div className="node-count">{count.toLocaleString()}</div>
+        )}
+
+        {/* Top Functions */}
+        {isActive && nodeData?.top_functions && nodeData.top_functions.length > 0 && (
+          <div className="node-functions">
+            {nodeData.top_functions.slice(0, 2).map((func, idx) => (
+              <div key={idx} className="func-line">
+                <span className="func-name">{func.name}</span>
+                <span className="func-pct">{func.pct}%</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Latency */}
+        {isActive && nodeData?.latency && nodeData.latency.p50 > 0 && (
+          <div className="node-latency">
+            ⏱️ p50: {nodeData.latency.p50.toFixed(1)}µs
+          </div>
+        )}
+
+        {/* Verdict for Netfilter nodes */}
+        {isActive && isNetfilterNode && verdictData && (
+          <div className="node-verdict">
+            {Object.entries(verdictData).map(([verdict, vCount]) => {
+              const pct = count > 0 ? ((vCount / count) * 100).toFixed(0) : 0;
+              return pct > 0 ? (
+                <div key={verdict} className={`verdict-badge verdict-${verdict.toLowerCase()}`}>
+                  {verdict}: {pct}%
+                </div>
+              ) : null;
+            })}
+          </div>
+        )}
+
+        {/* Tooltip (shows on hover) */}
+        {isActive && (
+          <div className="node-tooltip">
+            <div className="tooltip-header">{stageDef.name}</div>
+            <div className="tooltip-stat">Events: {count.toLocaleString()}</div>
+            {nodeData?.unique_packets && (
+              <div className="tooltip-stat">Unique: {nodeData.unique_packets}</div>
+            )}
+            {nodeData?.latency && nodeData.latency.p50 > 0 && (
+              <div className="tooltip-section">
+                <div className="tooltip-label">Latency (µs):</div>
+                <div className="tooltip-stat">p50: {nodeData.latency.p50.toFixed(1)}</div>
+                <div className="tooltip-stat">p90: {nodeData.latency.p90.toFixed(1)}</div>
+                <div className="tooltip-stat">p99: {nodeData.latency.p99.toFixed(1)}</div>
+              </div>
+            )}
+            {nodeData?.top_functions && nodeData.top_functions.length > 0 && (
+              <div className="tooltip-section">
+                <div className="tooltip-label">Top Functions:</div>
+                {nodeData.top_functions.map((func, idx) => (
+                  <div key={idx} className="tooltip-stat">
+                    {idx + 1}. {func.name} – {func.pct}%
+                  </div>
+                ))}
+              </div>
+            )}
+            {verdictData && (
+              <div className="tooltip-section">
+                <div className="tooltip-label">Verdicts:</div>
+                {Object.entries(verdictData).map(([verdict, vCount]) => (
+                  <div key={verdict} className="tooltip-stat">
+                    {verdict}: {vCount} ({((vCount / count) * 100).toFixed(1)}%)
+                  </div>
+                ))}
+              </div>
+            )}
+            {nodeData?.drops > 0 && (
+              <div className="tooltip-stat error">Drops: {nodeData.drops}</div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Color based on drop rate
 function getDropRateColor(dropRate) {
   if (dropRate <= 1) {
@@ -160,85 +314,170 @@ function SessionRealtimeStats({ sessionId }) {
         </div>
       </div>
 
-      {/* Full Mode Pipeline Stats - NEW */}
-      {stats.mode === 'full' && stats.stats && (stats.stats.Inbound || stats.stats.Outbound) && (
-        <div className="pipeline-stats-container">
-          <h2 className="section-title">🔄 Packet Pipeline Flow</h2>
+      {/* ENHANCED FULL MODE: Pipeline Flow Visualization with Detailed Metrics */}
+      {stats.mode === 'full' && stats.nodes && Object.keys(stats.nodes).length > 0 && (
+        <div className="realtime-panel full-width">
+          <h3>🔄 Enhanced Packet Pipeline Flow</h3>
 
-          <div className="pipeline-grid">
+          <div className="pipeline-flow-container">
             {/* Inbound Pipeline */}
-            {stats.stats.Inbound && Object.keys(stats.stats.Inbound).length > 0 && (
-              <div className="pipeline-column inbound">
-                <div className="pipeline-header inbound">
-                  <span className="pipeline-icon">📥</span>
-                  <h3>Inbound Traffic</h3>
-                  <span className="pipeline-badge">
-                    {Object.values(stats.stats.Inbound).reduce((sum, val) => sum + val, 0).toLocaleString()} events
-                  </span>
+            {(() => {
+              const inboundNodes = PIPELINE_DEFINITIONS.Inbound.mainFlow.concat(
+                ...Object.values(PIPELINE_DEFINITIONS.Inbound.branches)
+              );
+              const inboundCounts = inboundNodes.map(s => stats.nodes[s.name]?.count || 0);
+              const hasInbound = inboundCounts.some(c => c > 0);
+
+              if (!hasInbound) return null;
+
+              const maxCount = Math.max(...inboundCounts);
+
+              return (
+                <div className="pipeline-direction">
+                  <div className="pipeline-direction-header">
+                    <span className="pipeline-direction-icon">📥</span>
+                    <h4>Inbound Traffic</h4>
+                    <span className="pipeline-event-count">
+                      {inboundCounts.reduce((sum, val) => sum + val, 0).toLocaleString()} events
+                    </span>
+                  </div>
+
+                  {/* Main Pipeline Flow */}
+                  <div className="pipeline-main-flow">
+                    <div className="pipeline-stages">
+                      {PIPELINE_DEFINITIONS.Inbound.mainFlow.map((stageDef, index, arr) => {
+                        const nodeData = stats.nodes[stageDef.name];
+                        const isActive = nodeData && nodeData.count > 0;
+
+                        return (
+                          <React.Fragment key={stageDef.name}>
+                            <PipelineNode
+                              stageDef={stageDef}
+                              nodeData={nodeData}
+                              maxCount={maxCount}
+                              isActive={isActive}
+                            />
+                            {index < arr.length - 1 && (
+                              <div className="stage-arrow" style={{
+                                color: isActive ? stageDef.color : '#999'
+                              }}>→</div>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Branching Point */}
+                  <div className="pipeline-branches">
+                    {/* Local Delivery Branch */}
+                    <div className="pipeline-branch local">
+                      <div className="branch-header">
+                        <span className="branch-arrow">⤷</span>
+                        <span className="branch-label">Local Delivery</span>
+                      </div>
+                      <div className="pipeline-stages">
+                        {PIPELINE_DEFINITIONS.Inbound.branches['Local Delivery'].map((stageDef, index, arr) => {
+                          const nodeData = stats.nodes[stageDef.name];
+                          const isActive = nodeData && nodeData.count > 0;
+
+                          return (
+                            <React.Fragment key={stageDef.name}>
+                              <PipelineNode
+                                stageDef={stageDef}
+                                nodeData={nodeData}
+                                maxCount={maxCount}
+                                isActive={isActive}
+                              />
+                              {index < arr.length - 1 && (
+                                <div className="stage-arrow" style={{
+                                  color: isActive ? stageDef.color : '#999'
+                                }}>→</div>
+                              )}
+                            </React.Fragment>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Forward Branch */}
+                    <div className="pipeline-branch forward">
+                      <div className="branch-header">
+                        <span className="branch-arrow">⤷</span>
+                        <span className="branch-label">Forward</span>
+                      </div>
+                      <div className="pipeline-stages">
+                        {PIPELINE_DEFINITIONS.Inbound.branches['Forward'].map((stageDef, index, arr) => {
+                          const nodeData = stats.nodes[stageDef.name];
+                          const isActive = nodeData && nodeData.count > 0;
+
+                          return (
+                            <React.Fragment key={stageDef.name}>
+                              <PipelineNode
+                                stageDef={stageDef}
+                                nodeData={nodeData}
+                                maxCount={maxCount}
+                                isActive={isActive}
+                              />
+                              {index < arr.length - 1 && (
+                                <div className="stage-arrow" style={{
+                                  color: isActive ? stageDef.color : '#999'
+                                }}>→</div>
+                              )}
+                            </React.Fragment>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <div className="pipeline-layers">
-                  {Object.entries(stats.stats.Inbound)
-                    .sort((a, b) => b[1] - a[1])
-                    .map(([layer, count]) => {
-                      const maxCount = Math.max(...Object.values(stats.stats.Inbound));
-                      const percentage = (count / maxCount) * 100;
-                      return (
-                        <div key={layer} className="pipeline-layer-item">
-                          <div className="layer-name-badge inbound">
-                            <span className="layer-dot">●</span>
-                            {layer}
-                          </div>
-                          <div className="layer-bar-container">
-                            <div
-                              className="layer-bar inbound"
-                              style={{ width: `${percentage}%` }}
-                            >
-                              <span className="layer-count">{count.toLocaleString()}</span>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Outbound Pipeline */}
-            {stats.stats.Outbound && Object.keys(stats.stats.Outbound).length > 0 && (
-              <div className="pipeline-column outbound">
-                <div className="pipeline-header outbound">
-                  <span className="pipeline-icon">📤</span>
-                  <h3>Outbound Traffic</h3>
-                  <span className="pipeline-badge">
-                    {Object.values(stats.stats.Outbound).reduce((sum, val) => sum + val, 0).toLocaleString()} events
-                  </span>
-                </div>
-                <div className="pipeline-layers">
-                  {Object.entries(stats.stats.Outbound)
-                    .sort((a, b) => b[1] - a[1])
-                    .map(([layer, count]) => {
-                      const maxCount = Math.max(...Object.values(stats.stats.Outbound));
-                      const percentage = (count / maxCount) * 100;
+            {(() => {
+              const outboundCounts = PIPELINE_DEFINITIONS.Outbound.map(s => stats.nodes[s.name]?.count || 0);
+              const hasOutbound = outboundCounts.some(c => c > 0);
+
+              if (!hasOutbound) return null;
+
+              const maxCount = Math.max(...outboundCounts);
+
+              return (
+                <div className="pipeline-direction">
+                  <div className="pipeline-direction-header">
+                    <span className="pipeline-direction-icon">📤</span>
+                    <h4>Outbound Traffic</h4>
+                    <span className="pipeline-event-count">
+                      {outboundCounts.reduce((sum, val) => sum + val, 0).toLocaleString()} events
+                    </span>
+                  </div>
+
+                  <div className="pipeline-stages">
+                    {PIPELINE_DEFINITIONS.Outbound.map((stageDef, index, arr) => {
+                      const nodeData = stats.nodes[stageDef.name];
+                      const isActive = nodeData && nodeData.count > 0;
+
                       return (
-                        <div key={layer} className="pipeline-layer-item">
-                          <div className="layer-name-badge outbound">
-                            <span className="layer-dot">●</span>
-                            {layer}
-                          </div>
-                          <div className="layer-bar-container">
-                            <div
-                              className="layer-bar outbound"
-                              style={{ width: `${percentage}%` }}
-                            >
-                              <span className="layer-count">{count.toLocaleString()}</span>
-                            </div>
-                          </div>
-                        </div>
+                        <React.Fragment key={stageDef.name}>
+                          <PipelineNode
+                            stageDef={stageDef}
+                            nodeData={nodeData}
+                            maxCount={maxCount}
+                            isActive={isActive}
+                          />
+                          {index < arr.length - 1 && (
+                            <div className="stage-arrow" style={{
+                              color: isActive ? stageDef.color : '#999'
+                            }}>→</div>
+                          )}
+                        </React.Fragment>
                       );
                     })}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
         </div>
       )}

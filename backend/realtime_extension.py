@@ -1114,9 +1114,9 @@ class RealtimeTracer:
                 break
     
     def _stats_broadcast_loop(self):
-        """Broadcast statistics every second"""
+        """Broadcast statistics every 0.5 seconds to reduce sample loss"""
         while self.running:
-            time.sleep(1)
+            time.sleep(0.5)  # Changed from 1s to 0.5s for batching
             try:
                 summary = self.stats.get_summary()
                 self.socketio.emit('stats_update', summary)
@@ -1710,24 +1710,24 @@ class RealtimeExtension:
                     self._session_not_found_logged.add(session_id)
     
     def _emit_session_stats_loop(self):
-        """Background thread to emit session stats every second"""
-        print(f"[DEBUG] _emit_session_stats_loop started")
+        """Background thread to emit session stats every 0.5 seconds to reduce sample loss"""
+        print(f"[DEBUG] _emit_session_stats_loop started (0.5s interval)")
         iteration = 0
         while self._session_stats_running:
-            time.sleep(1)
+            time.sleep(0.5)  # Changed from 1s to 0.5s for batching
             iteration += 1
-            
+
             with self.session_lock:
-                if iteration <= 3:  # Debug first 3 iterations
+                if iteration <= 6:  # Debug first 6 iterations (3 seconds worth)
                     print(f"[DEBUG] Emit iteration #{iteration}, active sessions: {list(self.session_trackers.keys())}")
-                
+
                 for session_id, tracker in list(self.session_trackers.items()):
                     try:
                         stats = tracker.get_stats()
-                        
-                        if iteration <= 3:  # Debug first 3 iterations
+
+                        if iteration <= 6:  # Debug first 6 iterations
                             print(f"[DEBUG] Emitting stats for {session_id}: total_events={stats['total_events']}, total_packets={stats['total_packets']}")
-                        
+
                         # Emit to session-specific room
                         self.socketio.emit('session_stats_update', {
                             'session_id': session_id,
