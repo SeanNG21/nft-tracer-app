@@ -147,53 +147,119 @@ static __always_inline u64 extract_rule_handle(void *expr)
 
 static __always_inline void extract_packet_info(struct sk_buff *skb, struct packet_info *pkt)
 {
-    if (!skb)
+    if (!skb) {
+        bpf_trace_printk("ERROR: skb is NULL\n");
         return;
+    }
 
     pkt->skb_addr = (u64)skb;
+    bpf_trace_printk("DEBUG: Processing SKB %llx\n", pkt->skb_addr);
 
+    // Read length with error check
     u32 len = 0;
-    bpf_probe_read_kernel(&len, sizeof(len), (char *)skb + 0x88);
+    int ret = bpf_probe_read_kernel(&len, sizeof(len), (char *)skb + 0x88);
+    if (ret != 0) {
+        bpf_trace_printk("ERROR: Failed to read skb->len, ret=%d\n", ret);
+        return;
+    }
+
+    if (len == 0 || len > 65535) {
+        bpf_trace_printk("WARN: Invalid len=%u\n", len);
+        return;
+    }
+
     pkt->length = len;
+    bpf_trace_printk("DEBUG: len=%u\n", len);
 
+    // Read data pointer with error check
     void *ip_header = NULL;
-    bpf_probe_read_kernel(&ip_header, sizeof(ip_header), (char *)skb + 0xd0);
-
-    if (!ip_header)
+    ret = bpf_probe_read_kernel(&ip_header, sizeof(ip_header), (char *)skb + 0xd0);
+    if (ret != 0) {
+        bpf_trace_printk("ERROR: Failed to read skb->data ptr, ret=%d\n", ret);
         return;
+    }
 
+    if (!ip_header) {
+        bpf_trace_printk("ERROR: ip_header is NULL\n");
+        return;
+    }
+    bpf_trace_printk("DEBUG: ip_header=%p\n", ip_header);
+
+    // Parse IP header with error check
     u8 ihl_version = 0;
-    bpf_probe_read_kernel(&ihl_version, sizeof(ihl_version), ip_header);
-    u8 version = (ihl_version >> 4) & 0x0F;
-
-    if (version != 4)
+    ret = bpf_probe_read_kernel(&ihl_version, sizeof(ihl_version), ip_header);
+    if (ret != 0) {
+        bpf_trace_printk("ERROR: Failed to read IP version, ret=%d\n", ret);
         return;
+    }
+
+    u8 version = (ihl_version >> 4) & 0x0F;
+    bpf_trace_printk("DEBUG: IP version=%u\n", version);
+
+    if (version != 4) {
+        bpf_trace_printk("WARN: Not IPv4, version=%u\n", version);
+        return;
+    }
 
     u8 protocol = 0;
     u32 saddr = 0;
     u32 daddr = 0;
 
-    bpf_probe_read_kernel(&protocol, sizeof(protocol), (char *)ip_header + 9);
-    bpf_probe_read_kernel(&saddr, sizeof(saddr), (char *)ip_header + 12);
-    bpf_probe_read_kernel(&daddr, sizeof(daddr), (char *)ip_header + 16);
+    ret = bpf_probe_read_kernel(&protocol, sizeof(protocol), (char *)ip_header + 9);
+    if (ret != 0) {
+        bpf_trace_printk("ERROR: Failed to read protocol, ret=%d\n", ret);
+        return;
+    }
+
+    ret = bpf_probe_read_kernel(&saddr, sizeof(saddr), (char *)ip_header + 12);
+    if (ret != 0) {
+        bpf_trace_printk("ERROR: Failed to read saddr, ret=%d\n", ret);
+        return;
+    }
+
+    ret = bpf_probe_read_kernel(&daddr, sizeof(daddr), (char *)ip_header + 16);
+    if (ret != 0) {
+        bpf_trace_printk("ERROR: Failed to read daddr, ret=%d\n", ret);
+        return;
+    }
 
     pkt->protocol = protocol;
     pkt->src_ip = saddr;
     pkt->dst_ip = daddr;
+    bpf_trace_printk("DEBUG: proto=%u, saddr=%x, daddr=%x\n", protocol, saddr, daddr);
 
+    // Parse TCP/UDP ports
     if (protocol == 6 || protocol == 17) {
         u8 ihl = (ihl_version & 0x0F) * 4;
+
+        if (ihl < 20 || ihl > 60) {
+            bpf_trace_printk("WARN: Invalid IHL=%u\n", ihl);
+            return;
+        }
+
         void *trans_header = (char *)ip_header + ihl;
 
         u16 sport = 0;
         u16 dport = 0;
 
-        bpf_probe_read_kernel(&sport, sizeof(sport), trans_header);
-        bpf_probe_read_kernel(&dport, sizeof(dport), (char *)trans_header + 2);
+        ret = bpf_probe_read_kernel(&sport, sizeof(sport), trans_header);
+        if (ret != 0) {
+            bpf_trace_printk("ERROR: Failed to read sport, ret=%d\n", ret);
+            return;
+        }
+
+        ret = bpf_probe_read_kernel(&dport, sizeof(dport), (char *)trans_header + 2);
+        if (ret != 0) {
+            bpf_trace_printk("ERROR: Failed to read dport, ret=%d\n", ret);
+            return;
+        }
 
         pkt->src_port = bpf_ntohs(sport);
         pkt->dst_port = bpf_ntohs(dport);
+        bpf_trace_printk("DEBUG: sport=%u, dport=%u\n", pkt->src_port, pkt->dst_port);
     }
+
+    bpf_trace_printk("SUCCESS: Extracted packet info\n");
 }
 
 static __always_inline void extract_from_nft_pktinfo(void *pkt_ptr, struct packet_info *pkt)

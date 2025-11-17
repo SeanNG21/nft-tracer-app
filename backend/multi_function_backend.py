@@ -84,20 +84,97 @@ class MultiFunctionEvent:
 
 class MultiFunctionBackendTracer:
     """
-    Multi-function tracer với backend integration
-    Compatible với app.py và realtime WebSocket
+    Multi-function tracer with backend integration
+    Compatible with app.py and realtime WebSocket
     """
+
+    # Socket layer functions (not packet processing) - EXCLUDE to reduce 65% overhead
+    EXCLUDE_FUNCTIONS = {
+        # Socket layer (not packet processing)
+        'sock_def_readable',
+        'sock_def_write_space',
+        'sock_wfree',
+        'sock_rfree',
+        'sock_def_error_report',
+        'sock_def_destruct',
+
+        # Socket filters
+        'sk_filter_trim_cap',
+        'sk_filter',
+        'sk_filter_release',
+
+        # Memory management (too noisy)
+        'skb_clone',
+        'skb_copy',
+        'skb_copy_expand',
+        'kfree_skb',
+        '__kfree_skb',
+        'consume_skb',
+        'skb_free_head',
+
+        # Internal queue management
+        'skb_queue_tail',
+        'skb_dequeue',
+        '__skb_queue_tail',
+        '__skb_dequeue',
+    }
+
+    # Critical path functions - only 20-30 functions for performance
+    CRITICAL_PATH_FUNCTIONS = {
+        # Ingress
+        '__netif_receive_skb_core',
+        'ip_rcv',
+        'ip_rcv_finish',
+
+        # Netfilter
+        'nf_hook_slow',
+        'nft_do_chain',
+        'nf_conntrack_in',
+
+        # Routing
+        'ip_route_input_slow',
+        'ip_route_input_noref',
+        'fib_validate_source',
+
+        # Forward
+        'ip_forward',
+        'ip_forward_finish',
+
+        # Local delivery
+        'ip_local_deliver',
+        'ip_local_deliver_finish',
+
+        # Transport
+        'tcp_v4_rcv',
+        'tcp_v4_do_rcv',
+        'udp_rcv',
+        'udp_queue_rcv_skb',
+
+        # Egress
+        'ip_output',
+        'ip_finish_output',
+        'ip_finish_output2',
+        '__dev_queue_xmit',
+        'dev_hard_start_xmit',
+
+        # NAT (if using nftables NAT)
+        'nf_nat_ipv4_fn',
+        'nf_nat_ipv4_in',
+        'nf_nat_ipv4_out',
+    }
 
     def __init__(self,
                  config_file: str = None,
                  max_functions: int = 50,
+                 mode: str = 'normal',  # 'normal' or 'critical'
                  event_callback: Optional[Callable] = None,
                  stats_callback: Optional[Callable] = None):
 
         self.config_file = config_file
         self.max_functions = max_functions
-        self.event_callback = event_callback  # Callback cho mỗi event (WebSocket)
-        self.stats_callback = stats_callback  # Callback cho stats (periodic)
+        self.mode = mode  # normal or critical
+        self.event_callback = event_callback  # Callback for each event (WebSocket)
+        self.stats_callback = stats_callback  # Callback for stats (periodic)
 
         self.bpf = None
         self.running = False
@@ -122,15 +199,37 @@ class MultiFunctionBackendTracer:
         self.last_stats_emit = time.time()
 
     def load_functions(self):
-        """Load functions to trace from config"""
+        """Load functions to trace from config with exclusion and critical path filtering"""
         if self.config_file and os.path.exists(self.config_file):
             with open(self.config_file, 'r') as f:
                 config = json.load(f)
 
-            self.functions_to_trace = [
+            # Load and filter functions
+            all_functions = [
                 f for f in config['functions']
                 if f.get('enabled', True)
-            ][:self.max_functions]
+            ]
+
+            # Apply exclusion list
+            filtered = [
+                f for f in all_functions
+                if f['name'] not in self.EXCLUDE_FUNCTIONS
+            ]
+
+            excluded_count = len(all_functions) - len(filtered)
+            if excluded_count > 0:
+                print(f"[*] Excluded {excluded_count} socket/noisy functions")
+
+            # Apply critical path filter if mode is 'critical'
+            if self.mode == 'critical':
+                filtered = [
+                    f for f in filtered
+                    if f['name'] in self.CRITICAL_PATH_FUNCTIONS
+                ]
+                print(f"[*] Using critical path mode: {len(filtered)} functions")
+
+            # Limit to max_functions
+            self.functions_to_trace = filtered[:self.max_functions]
 
             print(f"[✓] Loaded {len(self.functions_to_trace)} functions from config")
         else:

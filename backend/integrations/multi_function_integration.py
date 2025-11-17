@@ -40,6 +40,7 @@ def add_multi_function_routes(app, socketio=None):
                 data = request.get_json() or {}
                 config_file = data.get('config', 'trace_config.json')
                 max_functions = data.get('max_functions', 50)
+                mode = data.get('mode', 'normal')  # 'normal' or 'critical'
 
                 # Event callback: emit via WebSocket
                 def event_callback(evt: MultiFunctionEvent):
@@ -55,6 +56,7 @@ def add_multi_function_routes(app, socketio=None):
                 multi_tracer = MultiFunctionBackendTracer(
                     config_file=config_file,
                     max_functions=max_functions,
+                    mode=mode,
                     event_callback=event_callback,
                     stats_callback=stats_callback
                 )
