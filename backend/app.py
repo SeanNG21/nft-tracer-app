@@ -1056,77 +1056,52 @@ class TraceSession:
             bpf_code = f.read()
         
         self.bpf_full = BPF(text=bpf_code)
-        
-        print("[*] Attaching NFT hooks...")
-        try:
-            self.bpf_full.attach_kprobe(event="nft_do_chain", fn_name="kprobe__nft_do_chain")
-            self.bpf_full.attach_kretprobe(event="nft_do_chain", fn_name="kretprobe__nft_do_chain")
-            self.bpf_full.attach_kprobe(event="nft_immediate_eval", fn_name="kprobe__nft_immediate_eval")
-            self.bpf_full.attach_kretprobe(event="nf_hook_slow", fn_name="kretprobe__nf_hook_slow")
-            print("[✓] NFT hooks attached")
-        except Exception as e:
-            print(f"[!] Warning: NFT hooks failed - {e}")
-        
-        print("[*] Attaching packet path functions...")
 
-        # Track attachment by layer for better visibility
-        layer_stats = {
-            'XDP': 0, 'Driver RX': 0, 'Driver TX': 0, 'TC': 0,
-            'IP RX': 0, 'IP Forward': 0, 'IP TX': 0,
-            'Netfilter': 0, 'ConnTrack': 0, 'NAT': 0, 'Routing': 0,
-            'TCP': 0, 'UDP': 0, 'Other': 0
+        print("[*] Attaching core network stack functions...")
+
+        # Define core functions to trace (kernel function -> BPF function name)
+        core_functions = {
+            # NFT hooks
+            'nft_do_chain': ('trace_nft_do_chain_entry', 'trace_nft_do_chain_exit'),
+            'nft_immediate_eval': ('trace_nft_immediate_eval', None),
+
+            # Inbound RX path
+            'netif_receive_skb': ('trace_netif_receive_skb', None),
+            'napi_gro_receive': ('trace_napi_gro_receive', None),
+            'ip_route_input_slow': ('trace_ip_route_input_slow', None),
+            'ip_local_deliver': ('trace_ip_local_deliver', None),
+            'tcp_v4_rcv': ('trace_tcp_v4_rcv', None),
+            'udp_rcv': ('trace_udp_rcv', None),
+            'tcp_v4_do_rcv': ('trace_tcp_v4_do_rcv', None),
+
+            # Outbound TX path
+            'dev_queue_xmit': ('trace_dev_queue_xmit', None),
+            'dev_hard_start_xmit': ('trace_dev_hard_start_xmit', None),
+            'tcp_transmit_skb': ('trace_tcp_transmit_skb', None),
+            'udp_send_skb': ('trace_udp_send_skb', None),
+            'ip_output': ('trace_ip_output', None),
         }
 
-        def categorize_function(fname):
-            if 'xdp' in fname:
-                return 'XDP'
-            elif fname in ['napi_gro_receive', 'netif_receive_skb', '__netif_receive_skb_core',
-                          'netif_receive_skb_internal', 'eth_type_trans', 'netif_receive_skb_list_internal']:
-                return 'Driver RX'
-            elif fname in ['dev_queue_xmit', '__dev_queue_xmit', 'dev_hard_start_xmit', 'sch_direct_xmit']:
-                return 'Driver TX'
-            elif 'tc' in fname or fname == 'dev_queue_xmit_nit':
-                return 'TC'
-            elif fname in ['ip_rcv', 'ip_rcv_core', 'ip_rcv_finish', 'ip_local_deliver', 'ip_local_deliver_finish']:
-                return 'IP RX'
-            elif 'forward' in fname:
-                return 'IP Forward'
-            elif fname in ['ip_local_out', '__ip_local_out', 'ip_output', 'ip_finish_output', 'ip_finish_output2']:
-                return 'IP TX'
-            elif 'nf_hook' in fname or 'nf_queue' in fname or 'nf_reinject' in fname:
-                return 'Netfilter'
-            elif 'conntrack' in fname or 'nf_confirm' in fname:
-                return 'ConnTrack'
-            elif 'nat' in fname:
-                return 'NAT'
-            elif 'route' in fname or 'fib_' in fname:
-                return 'Routing'
-            elif 'tcp_' in fname:
-                return 'TCP'
-            elif 'udp_' in fname:
-                return 'UDP'
-            else:
-                return 'Other'
+        attached = []
+        failed = []
 
-        attached_total = 0
-        failed_total = 0
-
-        for func_name in self.functions:
+        for kernel_func, (kprobe_fn, kretprobe_fn) in core_functions.items():
             try:
-                self.bpf_full.attach_kprobe(event=func_name, fn_name="trace_skb_func")
-                layer = categorize_function(func_name)
-                layer_stats[layer] += 1
-                attached_total += 1
-            except:
-                failed_total += 1
+                self.bpf_full.attach_kprobe(event=kernel_func, fn_name=kprobe_fn)
+                attached.append(kernel_func)
 
-        print(f"[✓] Successfully attached {attached_total}/{len(self.functions)} functions")
-        if failed_total > 0:
-            print(f"[!] Failed to attach {failed_total} functions (may not exist in this kernel)")
-        print("[*] Attachment by layer:")
-        for layer, count in layer_stats.items():
-            if count > 0:
-                print(f"    • {layer:12s}: {count:2d} functions")
+                # Attach kretprobe if specified
+                if kretprobe_fn:
+                    self.bpf_full.attach_kretprobe(event=kernel_func, fn_name=kretprobe_fn)
+
+            except Exception as e:
+                failed.append(f"{kernel_func}: {str(e)[:50]}")
+
+        print(f"[✓] Attached {len(attached)}/{len(core_functions)} functions")
+        if failed:
+            print(f"[!] Failed to attach {len(failed)} functions:")
+            for fail in failed[:5]:  # Show first 5 failures
+                print(f"    • {fail}")
         
         # CRITICAL FIX: Increase buffer to 2MB to prevent sample loss
         self.bpf_full["events"].open_perf_buffer(

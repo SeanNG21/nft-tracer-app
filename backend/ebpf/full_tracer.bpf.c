@@ -276,100 +276,77 @@ static __always_inline int trace_network_function(struct pt_regs *ctx, struct sk
 }
 
 // ==============================================
-// DRIVER (NAPI) LAYER
+// NETWORK STACK PROBES - Generic function for all SKB tracing
+// Named without kprobe__ prefix to avoid BCC auto-attach
+// Python will attach these manually and skip if function doesn't exist
 // ==============================================
 
-int kprobe__netif_receive_skb(struct pt_regs *ctx) {
+int trace_netif_receive_skb(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     return trace_network_function(ctx, skb);
 }
 
-// ==============================================
-// GRO LAYER
-// ==============================================
-int kprobe__napi_gro_receive(struct pt_regs *ctx) {
+int trace_napi_gro_receive(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM2(ctx);
     return trace_network_function(ctx, skb);
 }
 
-// ==============================================
-// TC INGRESS LAYER (optional - may not exist in all kernels)
-// ==============================================
-// Removed: sch_handle_ingress, tcf_classify, tcf_exts_exec, cls_bpf_classify
-// These functions are not available in all kernel versions
-
-// ==============================================
-// CONNTRACK/NAT LAYER - Removed (optional, use NFT tracing instead)
-// ==============================================
-// These are traced via NFT hooks instead
-
-// ==============================================
-// ROUTING DECISION LAYER
-// ==============================================
-int kprobe__ip_route_input_slow(struct pt_regs *ctx) {
+int trace_ip_route_input_slow(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     return trace_network_function(ctx, skb);
 }
 
-// ==============================================
-// LOCAL DELIVERY LAYER
-// ==============================================
-int kprobe__ip_local_deliver(struct pt_regs *ctx) {
+int trace_ip_local_deliver(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     return trace_network_function(ctx, skb);
 }
 
-int kprobe__tcp_v4_rcv(struct pt_regs *ctx) {
+int trace_tcp_v4_rcv(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     return trace_network_function(ctx, skb);
 }
 
-int kprobe__udp_rcv(struct pt_regs *ctx) {
+int trace_udp_rcv(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     return trace_network_function(ctx, skb);
 }
 
-int kprobe__tcp_v4_do_rcv(struct pt_regs *ctx) {
+int trace_tcp_v4_do_rcv(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM2(ctx);
     return trace_network_function(ctx, skb);
 }
 
-// ==============================================
-// FORWARD/TX LAYER
-// ==============================================
-int kprobe__dev_queue_xmit(struct pt_regs *ctx) {
+int trace_dev_queue_xmit(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     return trace_network_function(ctx, skb);
 }
 
-int kprobe__dev_hard_start_xmit(struct pt_regs *ctx) {
+int trace_dev_hard_start_xmit(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     return trace_network_function(ctx, skb);
 }
 
-// ==============================================
-// OUTBOUND APPLICATION LAYER
-// ==============================================
-int kprobe__tcp_transmit_skb(struct pt_regs *ctx) {
+int trace_tcp_transmit_skb(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM2(ctx);
     return trace_network_function(ctx, skb);
 }
 
-int kprobe__udp_send_skb(struct pt_regs *ctx) {
+int trace_udp_send_skb(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     return trace_network_function(ctx, skb);
 }
 
-int kprobe__ip_output(struct pt_regs *ctx) {
+int trace_ip_output(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM2(ctx);
     return trace_network_function(ctx, skb);
 }
 
 // ==============================================
 // NFT INTEGRATION (replaces Netfilter tracing)
+// Python will attach these manually
 // ==============================================
 
-int kprobe__nft_do_chain(struct pt_regs *ctx)
+int trace_nft_do_chain_entry(struct pt_regs *ctx)
 {
     u64 tid = bpf_get_current_pid_tgid();
     void *pkt = (void *)PT_REGS_PARM1(ctx);
@@ -409,7 +386,7 @@ int kprobe__nft_do_chain(struct pt_regs *ctx)
     return 0;
 }
 
-int kretprobe__nft_do_chain(struct pt_regs *ctx)
+int trace_nft_do_chain_exit(struct pt_regs *ctx)
 {
     u64 tid = bpf_get_current_pid_tgid();
 
@@ -466,7 +443,7 @@ int kretprobe__nft_do_chain(struct pt_regs *ctx)
     return 0;
 }
 
-int kprobe__nft_immediate_eval(struct pt_regs *ctx)
+int trace_nft_immediate_eval(struct pt_regs *ctx)
 {
     u64 tid = bpf_get_current_pid_tgid();
     void *expr = (void *)PT_REGS_PARM1(ctx);
