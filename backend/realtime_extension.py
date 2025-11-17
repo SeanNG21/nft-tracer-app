@@ -1419,9 +1419,9 @@ class SessionStatsTracker:
             if self.total_events <= 5:
                 print(f"[SessionStats {self.session_id}] Event #{self.total_events}: hook={event.get('hook')}, func={event.get('func_name', 'N/A')}, verdict={event.get('verdict', 255)}, type={event.get('event_type', 'normal')}")
 
-            # Debug: Log all NFT verdict events (DROP, STOLEN, etc.)
-            if event.get('func_name') == 'nft_do_chain' and event.get('verdict', 255) in [0, 2]:  # DROP or STOLEN
-                print(f"[SessionStats {self.session_id}] NFT VERDICT: hook={event.get('hook')}, verdict={event.get('verdict')}, mode={self.mode}")
+            # Debug: Log ALL NFT events to track verdict distribution
+            if event.get('func_name') == 'nft_do_chain':
+                print(f"[SessionStats {self.session_id}] NFT EVENT: hook={event.get('hook')} ({hook_name}), verdict={event.get('verdict')} ({verdict_name}), mode={self.mode}")
 
             # Check if multifunction mode
             is_multifunction = event.get('event_type') == 'multifunction'
@@ -1500,12 +1500,13 @@ class SessionStatsTracker:
 
             # ENHANCED: Track pipeline nodes for full mode (for enhanced visualization)
             if self.mode == 'full':
-                # Map to pipeline layer
-                pipeline_layer = self._map_to_pipeline_layer(layer_name, func_name, hook_num)
+                # Use layer_name already determined above (line 1446)
+                # No need to call _map_to_pipeline_layer() again
+                pipeline_layer = layer_name
 
                 # Debug: Log layer mapping for NFT events
                 if func_name == 'nft_do_chain':
-                    print(f"[SessionStats {self.session_id}] Layer mapping: func={func_name}, hook={hook_num}, layer_name={layer_name}, pipeline_layer={pipeline_layer}")
+                    print(f"[SessionStats {self.session_id}] NFT TRACKING: func={func_name}, hook={hook_num} ({hook_name}), verdict={verdict_name}, pipeline_layer={pipeline_layer}")
 
                 # Detect direction
                 direction = self._detect_direction(hook_name, layer_name, func_name, hook_num)
@@ -1550,7 +1551,8 @@ class SessionStatsTracker:
 
                 # Debug: Log verdict tracking to node
                 if verdict_name != 'UNKNOWN' and func_name == 'nft_do_chain':
-                    print(f"[SessionStats {self.session_id}] TRACKED to node '{pipeline_layer}': verdict={verdict_name}, func={func_name}")
+                    current_breakdown = dict(node.verdict_breakdown) if node.verdict_breakdown else {}
+                    print(f"[SessionStats {self.session_id}] TRACKED to node '{pipeline_layer}': verdict={verdict_name}, current_breakdown={current_breakdown}")
 
             # Update total packets (count unique packets, not events)
             self.total_packets = max(self.total_packets, sum(h['packets_total'] for h in self.hooks.values()) // max(len(self.hooks), 1))
