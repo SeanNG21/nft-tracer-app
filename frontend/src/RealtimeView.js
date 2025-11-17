@@ -6,7 +6,7 @@ import './Realtime.css';
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
 const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 'http://localhost:5000';
 
-// Hook order for pipeline
+// Hook order for pipeline (OLD - kept for backward compatibility)
 const HOOK_ORDER = ['PRE_ROUTING', 'LOCAL_IN', 'FORWARD', 'LOCAL_OUT', 'POST_ROUTING'];
 const LAYER_ORDER = ['Ingress', 'L2', 'IP', 'Firewall', 'Socket', 'Egress'];
 
@@ -17,6 +17,41 @@ const HOOK_ICONS = {
   'FORWARD': '↔️',
   'LOCAL_OUT': '📤',
   'POST_ROUTING': '⚙️'
+};
+
+// NEW: Pipeline structure definitions for Inbound/Outbound flows
+const PIPELINE_DEFINITIONS = {
+  Inbound: [
+    { name: 'NIC', icon: '📡', color: '#2196f3' },
+    { name: 'Driver (NAPI)', icon: '🚗', color: '#1976d2' },
+    { name: 'GRO', icon: '🔄', color: '#0d47a1' },
+    { name: 'TC Ingress', icon: '🚦', color: '#01579b' },
+    { name: 'Netfilter PREROUTING', icon: '🔧', color: '#006064' },
+    { name: 'Conntrack', icon: '🔗', color: '#00838f' },
+    { name: 'NAT PREROUTING', icon: '🔀', color: '#0097a7' },
+    { name: 'Routing Decision', icon: '🗺️', color: '#00acc1' },
+    // Branching point
+    { name: 'Local Delivery', icon: '📥', color: '#26c6da', branch: 'local' },
+    { name: 'Netfilter INPUT', icon: '🛡️', color: '#4dd0e1', branch: 'local' },
+    { name: 'TCP/UDP', icon: '📦', color: '#80deea', branch: 'local' },
+    { name: 'Socket', icon: '🔌', color: '#b2ebf2', branch: 'local' },
+    { name: 'Forward', icon: '➡️', color: '#ff9800', branch: 'forward' },
+    { name: 'Netfilter FORWARD', icon: '🔀', color: '#fb8c00', branch: 'forward' },
+    { name: 'Netfilter POSTROUTING', icon: '⚙️', color: '#f57c00', branch: 'forward' },
+    { name: 'NIC TX', icon: '📤', color: '#ef6c00', branch: 'forward' },
+  ],
+  Outbound: [
+    { name: 'Application', icon: '💻', color: '#4caf50' },
+    { name: 'TCP/UDP Output', icon: '📤', color: '#43a047' },
+    { name: 'Netfilter OUTPUT', icon: '🛡️', color: '#388e3c' },
+    { name: 'Routing Lookup', icon: '🗺️', color: '#2e7d32' },
+    { name: 'Routing', icon: '🧭', color: '#1b5e20' },
+    { name: 'NAT', icon: '🔀', color: '#33691e' },
+    { name: 'Netfilter POSTROUTING', icon: '⚙️', color: '#558b2f' },
+    { name: 'TC Egress', icon: '🚦', color: '#689f38' },
+    { name: 'Driver TX', icon: '🚗', color: '#7cb342' },
+    { name: 'NIC', icon: '📡', color: '#8bc34a' },
+  ]
 };
 
 // Color based on drop rate
@@ -230,7 +265,107 @@ function RealtimeView() {
             </div>
           </div>
 
-          {/* LINEAR FLOW GRAPH: Hook Pipeline */}
+          {/* NEW: Pipeline Flow Visualization */}
+          {stats && stats.stats && (stats.stats.Inbound || stats.stats.Outbound) && (
+            <div className="realtime-panel full-width">
+              <h3>🔄 Packet Pipeline Flow</h3>
+
+              <div className="pipeline-flow-container">
+                {/* Inbound Pipeline */}
+                {stats.stats.Inbound && Object.keys(stats.stats.Inbound).length > 0 && (
+                  <div className="pipeline-direction">
+                    <div className="pipeline-direction-header">
+                      <span className="pipeline-direction-icon">📥</span>
+                      <h4>Inbound Traffic</h4>
+                      <span className="pipeline-event-count">
+                        {Object.values(stats.stats.Inbound).reduce((sum, val) => sum + val, 0).toLocaleString()} events
+                      </span>
+                    </div>
+
+                    <div className="pipeline-stages">
+                      {PIPELINE_DEFINITIONS.Inbound.map((stageDef, index) => {
+                        const count = stats.stats.Inbound[stageDef.name] || 0;
+                        const maxCount = Math.max(...Object.values(stats.stats.Inbound));
+                        const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
+                        const isActive = count > 0;
+                        const isBranch = stageDef.branch !== undefined;
+
+                        if (!isActive && count === 0) return null; // Skip inactive stages
+
+                        return (
+                          <div key={stageDef.name} className={`pipeline-stage-wrapper ${isBranch ? 'branch-' + stageDef.branch : ''}`}>
+                            <div
+                              className={`pipeline-stage ${isActive ? 'active' : 'inactive'}`}
+                              style={{
+                                backgroundColor: isActive ? stageDef.color : '#e0e0e0',
+                                opacity: isActive ? Math.max(0.3 + (percentage / 100) * 0.7, 0.4) : 0.3
+                              }}
+                            >
+                              <div className="stage-icon">{stageDef.icon}</div>
+                              <div className="stage-name">{stageDef.name}</div>
+                              {isActive && (
+                                <div className="stage-count">{count.toLocaleString()}</div>
+                              )}
+                            </div>
+                            {index < PIPELINE_DEFINITIONS.Inbound.length - 1 && !isBranch && (
+                              <div className="stage-arrow">→</div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Outbound Pipeline */}
+                {stats.stats.Outbound && Object.keys(stats.stats.Outbound).length > 0 && (
+                  <div className="pipeline-direction">
+                    <div className="pipeline-direction-header">
+                      <span className="pipeline-direction-icon">📤</span>
+                      <h4>Outbound Traffic</h4>
+                      <span className="pipeline-event-count">
+                        {Object.values(stats.stats.Outbound).reduce((sum, val) => sum + val, 0).toLocaleString()} events
+                      </span>
+                    </div>
+
+                    <div className="pipeline-stages">
+                      {PIPELINE_DEFINITIONS.Outbound.map((stageDef, index) => {
+                        const count = stats.stats.Outbound[stageDef.name] || 0;
+                        const maxCount = Math.max(...Object.values(stats.stats.Outbound));
+                        const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
+                        const isActive = count > 0;
+
+                        if (!isActive && count === 0) return null; // Skip inactive stages
+
+                        return (
+                          <div key={stageDef.name} className="pipeline-stage-wrapper">
+                            <div
+                              className={`pipeline-stage ${isActive ? 'active' : 'inactive'}`}
+                              style={{
+                                backgroundColor: isActive ? stageDef.color : '#e0e0e0',
+                                opacity: isActive ? Math.max(0.3 + (percentage / 100) * 0.7, 0.4) : 0.3
+                              }}
+                            >
+                              <div className="stage-icon">{stageDef.icon}</div>
+                              <div className="stage-name">{stageDef.name}</div>
+                              {isActive && (
+                                <div className="stage-count">{count.toLocaleString()}</div>
+                              )}
+                            </div>
+                            {index < PIPELINE_DEFINITIONS.Outbound.length - 1 && (
+                              <div className="stage-arrow">→</div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* LINEAR FLOW GRAPH: Hook Pipeline (OLD - kept for compatibility) */}
           {stats && stats.hooks && (
             <div className="realtime-panel full-width">
               <h3>🔄 Packet Flow Pipeline: Netfilter Hooks</h3>

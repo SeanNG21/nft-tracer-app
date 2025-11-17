@@ -991,3 +991,242 @@
   margin-bottom: 1rem;
   opacity: 0.5;
 }
+/* ============================================================================
+   PIPELINE FLOW VISUALIZATION - RealtimeView
+   ============================================================================ */
+
+.pipeline-flow-container {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  padding: 1rem 0;
+}
+
+.pipeline-direction {
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 12px;
+  padding: 1.5rem;
+  border: 2px solid #e0e0e0;
+  transition: all 0.3s ease;
+}
+
+.pipeline-direction:hover {
+  border-color: #2196f3;
+  box-shadow: 0 4px 16px rgba(33, 150, 243, 0.1);
+}
+
+.pipeline-direction-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.pipeline-direction-icon {
+  font-size: 2rem;
+}
+
+.pipeline-direction-header h4 {
+  margin: 0;
+  font-size: 1.3rem;
+  flex: 1;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.pipeline-event-count {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+
+.pipeline-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.pipeline-stage-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pipeline-stage-wrapper.branch-local {
+  margin-top: 2rem;
+  position: relative;
+}
+
+.pipeline-stage-wrapper.branch-local::before {
+  content: '⤷ Local';
+  position: absolute;
+  top: -1.5rem;
+  left: 0;
+  font-size: 0.8rem;
+  color: #26c6da;
+  font-weight: 600;
+}
+
+.pipeline-stage-wrapper.branch-forward {
+  margin-top: 2rem;
+  position: relative;
+}
+
+.pipeline-stage-wrapper.branch-forward::before {
+  content: '⤷ Forward';
+  position: absolute;
+  top: -1.5rem;
+  left: 0;
+  font-size: 0.8rem;
+  color: #ff9800;
+  font-weight: 600;
+}
+
+.pipeline-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  min-width: 120px;
+  max-width: 160px;
+  color: white;
+  font-weight: 600;
+  text-align: center;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  position: relative;
+  overflow: hidden;
+}
+
+.pipeline-stage::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.3) 50%,
+    transparent 100%
+  );
+  animation: stage-shimmer 3s infinite;
+}
+
+@keyframes stage-shimmer {
+  0% {
+    left: -100%;
+  }
+  50%, 100% {
+    left: 100%;
+  }
+}
+
+.pipeline-stage.active {
+  transform: scale(1);
+  cursor: pointer;
+}
+
+.pipeline-stage.active:hover {
+  transform: scale(1.05) translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+}
+
+.pipeline-stage.inactive {
+  background-color: #e0e0e0 !important;
+  color: #999;
+  opacity: 0.5;
+}
+
+.stage-icon {
+  font-size: 1.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.stage-name {
+  font-size: 0.85rem;
+  line-height: 1.2;
+  margin-bottom: 0.25rem;
+}
+
+.stage-count {
+  font-size: 0.75rem;
+  background: rgba(255, 255, 255, 0.3);
+  padding: 0.2rem 0.5rem;
+  border-radius: 10px;
+  margin-top: 0.25rem;
+  backdrop-filter: blur(10px);
+}
+
+.stage-arrow {
+  font-size: 1.5rem;
+  color: #999;
+  font-weight: bold;
+  user-select: none;
+  animation: arrow-pulse 2s ease-in-out infinite;
+}
+
+@keyframes arrow-pulse {
+  0%, 100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+}
+
+/* Responsive */
+@media (max-width: 1200px) {
+  .pipeline-stages {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .pipeline-stage-wrapper {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .stage-arrow {
+    transform: rotate(90deg);
+  }
+
+  .pipeline-stage {
+    max-width: 100%;
+    width: 100%;
+  }
+}
+
+@media (max-width: 768px) {
+  .pipeline-direction-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .pipeline-event-count {
+    width: 100%;
+    text-align: center;
+  }
+
+  .pipeline-stage {
+    min-width: 100px;
+  }
+
+  .stage-name {
+    font-size: 0.75rem;
+  }
+}
