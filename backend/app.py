@@ -752,7 +752,6 @@ class PacketTrace:
                     nft_events.append({
                         'timestamp': event['timestamp'],
                         'trace_type': trace_type,
-                        'verdict': event.get('verdict_str', 'UNKNOWN'),
                         'verdict_code': event.get('verdict', 255),
                         'verdict_raw': event.get('verdict_raw', 0),
                         'rule_seq': event.get('rule_seq', 0),
