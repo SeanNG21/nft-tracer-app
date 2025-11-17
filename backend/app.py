@@ -647,6 +647,10 @@ class PacketTrace:
         - Packets from/to application ports (frontend/backend self-tracing)
         - Traces with NO packet metadata AND no NFT activity (likely non-IPv4 or incomplete)
 
+        HIGH PRIORITY (always kept):
+        - Packets with DROP verdict (critical for security analysis)
+        - Packets with REJECT verdict (critical for security analysis)
+
         VALUE CRITERIA (trace is kept if it meets ANY):
         1. Has complete packet info (protocol, IPs, ports)
         2. Has multiple events (>= 3) showing actual packet processing WITH some metadata
@@ -665,6 +669,13 @@ class PacketTrace:
         # This prevents logging the application's own HTTP/WebSocket traffic
         if self.src_port in EXCLUDED_PORTS or self.dst_port in EXCLUDED_PORTS:
             return False
+
+        # HIGH PRIORITY: ALWAYS keep packets that were blocked by firewall
+        # This is the most important security information!
+        if self.final_verdict == 0:  # DROP
+            return True
+        if self.final_verdict_str and self.final_verdict_str in ['DROP', 'REJECT']:
+            return True
 
         # EXCLUSION: Traces with absolutely no packet metadata
         # UNLESS they have NFT verdict (which is valuable even without IP info)
@@ -714,22 +725,44 @@ class PacketTrace:
         """Export summary - SIMPLIFIED FORMAT for full mode"""
         sorted_events = sorted(self.events, key=lambda x: x['timestamp'])
 
-        # For FULL mode: Use simplified format with only function calls
+        # For FULL mode: Use simplified format with function calls + NFT events
         if self.mode == 'full':
-            # Extract only function_call events and simplify them
+            # Extract function_call events and NFT events separately
             simplified_events = []
+            nft_events = []
             total_function_calls = 0
 
             for event in sorted_events:
-                if event.get('trace_type') == 'function_call':
+                trace_type = event.get('trace_type')
+
+                if trace_type == 'function_call':
                     total_function_calls += 1
-                    # Simplified event structure - only essential fields
+                    # Simplified function event structure - only essential fields
                     simplified_events.append({
                         'timestamp': event['timestamp'],
                         'function': event['function'],
                         'layer': event['layer'],
                         'cpu_id': event['cpu_id'],
                         'comm': event['comm']
+                    })
+
+                elif trace_type in ['chain_exit', 'rule_eval', 'hook_exit']:
+                    # Include NFT events with essential verdict information
+                    nft_events.append({
+                        'timestamp': event['timestamp'],
+                        'trace_type': trace_type,
+                        'verdict': event.get('verdict_str', 'UNKNOWN'),
+                        'verdict_code': event.get('verdict', 255),
+                        'verdict_raw': event.get('verdict_raw', 0),
+                        'rule_seq': event.get('rule_seq', 0),
+                        'rule_handle': event.get('rule_handle', 0),
+                        'expr_addr': hex(event['expr_addr']) if event.get('expr_addr') else None,
+                        'chain_addr': hex(event['chain_addr']) if event.get('chain_addr') else None,
+                        'chain_depth': event.get('chain_depth', 0),
+                        'cpu_id': event['cpu_id'],
+                        'comm': event['comm'],
+                        'hook': event.get('hook', 255),
+                        'pf': event.get('pf', 0)
                     })
 
             # Determine branch based on direction and final stage
@@ -746,7 +779,7 @@ class PacketTrace:
             elif self.direction == "Outbound":
                 branch = "OUTPUT"
 
-            # Return simplified format
+            # Return simplified format WITH NFT events
             return {
                 'skb_addr': hex(self.skb_addr) if self.skb_addr > 0 else f"synthetic_{self.skb_addr}",
                 'protocol': self.protocol,
@@ -766,7 +799,9 @@ class PacketTrace:
                 'total_rules_evaluated': self.total_rules_evaluated,
                 'verdict_changes': self.verdict_changes,
                 'events': simplified_events,
-                'all_events_count': len(simplified_events)
+                'nft_events': nft_events,
+                'all_events_count': len(simplified_events),
+                'nft_events_count': len(nft_events)
             }
 
         # For other modes (NFT, Universal): Keep full format
