@@ -510,6 +510,10 @@ class PacketTrace:
             self.pipeline_stages = []
         if self.layer_counts is None:
             self.layer_counts = defaultdict(int)
+
+        # Deduplication tracking for function calls
+        # Track last call timestamp per function to deduplicate across packet lifecycle
+        self._func_last_seen = {}  # {func_name: timestamp}
     
     def add_universal_event(self, event: UniversalEvent, hook: int = 255):
         """Add function call event - ONLY if function is in the 50 critical list"""
@@ -518,6 +522,23 @@ class PacketTrace:
         if event.func_name not in FUNCTION_TO_LAYER:
             # Silently drop functions not in our critical list
             return
+
+        # FIX: Deduplicate repeated function calls within packet lifecycle
+        # Same function called multiple times (e.g., nf_hook_slow at 4 different hooks)
+        # within packet duration → only log first occurrence to reduce noise
+        # Typical packet processing: 50-100 microseconds, use 70us to be safe
+        DEDUP_WINDOW_NS = 70_000  # 70 microseconds
+
+        if event.func_name in self._func_last_seen:
+            last_ts = self._func_last_seen[event.func_name]
+            time_diff = event.timestamp - last_ts
+
+            # If same function called again within window → skip duplicate
+            if time_diff < DEDUP_WINDOW_NS:
+                return
+
+        # Update last seen timestamp for this function
+        self._func_last_seen[event.func_name] = event.timestamp
 
         # Map function to layer
         base_layer = FUNCTION_TO_LAYER[event.func_name]
