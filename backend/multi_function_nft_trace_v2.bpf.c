@@ -231,7 +231,7 @@ static __always_inline void copy_string(char *dest, const char *src, u32 max_len
 // =============================================================================
 // GENERIC FUNCTION TRACER with metadata lookup
 // =============================================================================
-int trace_skb_generic(struct pt_regs *ctx, struct sk_buff *skb, u32 func_id)
+static __always_inline int trace_skb_generic(struct pt_regs *ctx, struct sk_buff *skb, u32 func_id)
 {
     if (!skb)
         return 0;
