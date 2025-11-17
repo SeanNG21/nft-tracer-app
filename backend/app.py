@@ -122,6 +122,7 @@ FUNCTION_TO_LAYER = {
     'nf_hook_slow': 'Netfilter',  # Generic - refined by hook
     'nf_hook_thresh': 'Netfilter',
     'nf_reinject': 'Netfilter',
+    'nft_do_chain': 'Netfilter',  # NFT chain processing - refined by hook
 
     # Conntrack
     'nf_conntrack_in': 'Conntrack',
@@ -256,8 +257,8 @@ def refine_layer_by_hook(func_name: str, base_layer: str, hook: int) -> str:
     Refine generic layer name based on netfilter hook value.
     Hook values: 0=PREROUTING, 1=INPUT, 2=FORWARD, 3=OUTPUT, 4=POSTROUTING
     """
-    # nf_hook_slow and similar functions need to be refined by hook
-    if base_layer == 'Netfilter' or 'nf_hook' in func_name or 'nf_queue' in func_name:
+    # nf_hook_slow, nft_do_chain and similar functions need to be refined by hook
+    if base_layer == 'Netfilter' or 'nf_hook' in func_name or 'nf_queue' in func_name or 'nft_' in func_name:
         hook_map = {
             0: 'Netfilter PREROUTING',
             1: 'Netfilter INPUT',
@@ -1571,11 +1572,12 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                         realtime.process_session_event({
                             'hook': event.hook,
                             'func_name': func_name,
-                            'verdict': event.verdict,
+                            'verdict': 255,  # No verdict for function events
                             'protocol': event.protocol,
                             'src_ip': trace._format_ip(event.src_ip),
                             'dst_ip': trace._format_ip(event.dst_ip),
-                            'timestamp': time.time()
+                            'skb_addr': f"{event.skb_addr:x}",
+                            'timestamp': event.timestamp / 1_000_000_000.0  # Convert ns to seconds
                         }, self.session_id)
                     except Exception as e:
                         # Silent fail - don't break session if realtime fails
@@ -1608,7 +1610,8 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                             'protocol': event.protocol,
                             'src_ip': trace._format_ip(event.src_ip),
                             'dst_ip': trace._format_ip(event.dst_ip),
-                            'timestamp': time.time()
+                            'skb_addr': f"{event.skb_addr:x}",
+                            'timestamp': event.timestamp / 1_000_000_000.0  # Convert ns to seconds
                         }, self.session_id)
                     except Exception as e:
                         # Silent fail - don't break session if realtime fails

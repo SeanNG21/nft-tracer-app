@@ -82,13 +82,13 @@ HOOK_LAYER_MAP = {
 LAYER_ORDER = ["Ingress", "L2", "IP", "Firewall", "Socket", "Egress"]
 
 VERDICT_MAP = {
-    0: "ACCEPT",
-    1: "DROP",
-    2: "STOLEN",
-    3: "QUEUE",
-    4: "REPEAT",
-    5: "STOP",
-    10: "DROP",
+    0: "DROP",     # NF_DROP
+    1: "ACCEPT",   # NF_ACCEPT
+    2: "STOLEN",   # NF_STOLEN
+    3: "QUEUE",    # NF_QUEUE
+    4: "REPEAT",   # NF_REPEAT
+    5: "STOP",     # NF_STOP
+    10: "DROP",    # Negative codes mapped to positive
     11: "STOLEN",
     12: "QUEUE",
     13: "REPEAT",
@@ -139,6 +139,7 @@ FUNCTION_TO_LAYER = {
     'nf_hook_slow': 'Netfilter',
     'nf_hook_thresh': 'Netfilter',
     'nf_reinject': 'Netfilter',
+    'nft_do_chain': 'Netfilter',  # NFT chain processing - refined by hook
 
     # Conntrack
     'nf_conntrack_in': 'Conntrack',
@@ -207,8 +208,8 @@ def refine_layer_by_hook(func_name: str, base_layer: str, hook: int) -> str:
     Refine generic layer name based on netfilter hook value.
     Hook values: 0=PREROUTING, 1=INPUT, 2=FORWARD, 3=OUTPUT, 4=POSTROUTING
     """
-    # nf_hook_slow and similar functions need to be refined by hook
-    if base_layer == 'Netfilter' or 'nf_hook' in func_name or 'nf_queue' in func_name:
+    # nf_hook_slow, nft_do_chain and similar functions need to be refined by hook
+    if base_layer == 'Netfilter' or 'nf_hook' in func_name or 'nf_queue' in func_name or 'nft_' in func_name:
         hook_map = {
             0: 'Netfilter PREROUTING',
             1: 'Netfilter INPUT',
@@ -315,7 +316,7 @@ class NodeStats:
             self.latencies_us.append(latency_us)
         if function:
             self.function_calls[function] += 1
-        if verdict:
+        if verdict and verdict != 'UNKNOWN':
             self.verdict_breakdown[verdict] += 1
             if verdict == 'DROP':
                 self.drop_count += 1
@@ -1457,10 +1458,11 @@ class SessionStatsTracker:
             # Update layer stats
             layer_stats = hook_stats['layers'][layer_name]
             layer_stats['packets_in'] += 1
-            
-            # Track verdict
-            layer_stats['verdict_breakdown'][verdict_name] += 1
-            
+
+            # Track verdict (skip UNKNOWN for function events)
+            if verdict_name != 'UNKNOWN':
+                layer_stats['verdict_breakdown'][verdict_name] += 1
+
             # Track function
             if func_name:
                 layer_stats['function_calls'][func_name] += 1
