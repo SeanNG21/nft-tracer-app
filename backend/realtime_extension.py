@@ -413,6 +413,7 @@ class RealtimeTracer:
         else:
             possible_paths = [
                 "/mnt/user-data/uploads/full_tracer_bpf.c",
+                os.path.join(os.path.dirname(__file__), "ebpf", "full_tracer.bpf.c"),
                 os.path.join(os.getcwd(), "full_tracer.bpf.c"),
                 os.path.join(os.getcwd(), "full_tracer_bpf.c"),
                 os.path.join(os.path.dirname(__file__), "full_tracer.bpf.c"),

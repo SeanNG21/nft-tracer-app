@@ -146,7 +146,7 @@ class MultiFunctionBackendTracer:
 
     def _generate_bpf_code(self) -> str:
         """Generate BPF code dynamically"""
-        bpf_base_path = os.path.join(os.path.dirname(__file__), 'multi_function_nft_trace_v2.bpf.c')
+        bpf_base_path = os.path.join(os.path.dirname(__file__), 'ebpf', 'multi_function_nft_trace_v2.bpf.c')
         with open(bpf_base_path, 'r') as f:
             base_bpf = f.read()
 

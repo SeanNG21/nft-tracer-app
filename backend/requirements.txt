@@ -5,3 +5,8 @@ psutil>=5.8.0
 # Realtime visualization (optional but recommended)
 flask-socketio>=5.0.0
 python-socketio>=5.0.0
+
+# BCC for eBPF tracing (required)
+# Note: Install system package first: apt-get install bpfcc-tools python3-bpfcc
+# Or install from source: https://github.com/iovisor/bcc
+bcc>=0.18.0

@@ -20,8 +20,8 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import psutil
 
-from btf_skb_discoverer import BTFSKBDiscoverer
-from nftables_manager import NFTablesManager
+from discovery.btf_skb_discoverer import BTFSKBDiscoverer
+from integrations.nftables_manager import NFTablesManager
 
 try:
     from bcc import BPF
@@ -72,12 +72,12 @@ MULTI_FUNCTION_AVAILABLE = False
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
-NFT_TRACER_PATH = os.path.join(os.path.dirname(__file__), "nft_tracer.bpf.c")
-FULL_TRACER_PATH = os.path.join(os.path.dirname(__file__), "full_tracer.bpf.c")
-MULTIFUNCTION_TRACER_PATH = os.path.join(os.path.dirname(__file__), "multi_function_nft_trace_v2.bpf.c")
-FUNCTIONS_CACHE = os.path.join(os.path.dirname(__file__), "skb_functions.json")
-TRACE_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "trace_config.json")
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "data", "output")
+NFT_TRACER_PATH = os.path.join(os.path.dirname(__file__), "ebpf", "nft_tracer.bpf.c")
+FULL_TRACER_PATH = os.path.join(os.path.dirname(__file__), "ebpf", "full_tracer.bpf.c")
+MULTIFUNCTION_TRACER_PATH = os.path.join(os.path.dirname(__file__), "ebpf", "multi_function_nft_trace_v2.bpf.c")
+FUNCTIONS_CACHE = os.path.join(os.path.dirname(__file__), "data", "cache", "skb_functions.json")
+TRACE_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "data", "cache", "trace_config.json")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
