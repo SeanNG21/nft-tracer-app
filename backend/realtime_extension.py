@@ -1415,9 +1415,13 @@ class SessionStatsTracker:
         with self.lock:
             self.total_events += 1
 
-            # Debug: Log first few events
+            # Debug: Log first few events and NFT verdict events
             if self.total_events <= 5:
-                print(f"[SessionStats {self.session_id}] Event #{self.total_events}: hook={event.get('hook')}, func={event.get('func_name', 'N/A')}, type={event.get('event_type', 'normal')}")
+                print(f"[SessionStats {self.session_id}] Event #{self.total_events}: hook={event.get('hook')}, func={event.get('func_name', 'N/A')}, verdict={event.get('verdict', 255)}, type={event.get('event_type', 'normal')}")
+
+            # Debug: Log all NFT verdict events (DROP, STOLEN, etc.)
+            if event.get('func_name') == 'nft_do_chain' and event.get('verdict', 255) in [0, 2]:  # DROP or STOLEN
+                print(f"[SessionStats {self.session_id}] NFT VERDICT: hook={event.get('hook')}, verdict={event.get('verdict')}, mode={self.mode}")
 
             # Check if multifunction mode
             is_multifunction = event.get('event_type') == 'multifunction'
@@ -1437,7 +1441,11 @@ class SessionStatsTracker:
                 layer_name_raw = event['layer']  # Layer from BPF metadata
                 # Map BPF layer names to frontend layer names
                 layer_name = self._map_multifunction_layer(layer_name_raw, hook_name)
+            elif self.mode == 'full':
+                # Full mode: Use FUNCTION_TO_LAYER mapping with hook refinement
+                layer_name = self._map_to_pipeline_layer(layer_name='', function=func_name, hook=hook_num)
             else:
+                # Legacy modes: Use LAYER_MAP
                 layer_name = self._determine_layer(func_name, hook_name)
 
             # Multifunction-specific stats
@@ -1495,6 +1503,10 @@ class SessionStatsTracker:
                 # Map to pipeline layer
                 pipeline_layer = self._map_to_pipeline_layer(layer_name, func_name, hook_num)
 
+                # Debug: Log layer mapping for NFT events
+                if func_name == 'nft_do_chain':
+                    print(f"[SessionStats {self.session_id}] Layer mapping: func={func_name}, hook={hook_num}, layer_name={layer_name}, pipeline_layer={pipeline_layer}")
+
                 # Detect direction
                 direction = self._detect_direction(hook_name, layer_name, func_name, hook_num)
 
@@ -1535,6 +1547,10 @@ class SessionStatsTracker:
                     verdict=verdict_name,
                     error=(event.get('error_code', 0) > 0)
                 )
+
+                # Debug: Log verdict tracking to node
+                if verdict_name != 'UNKNOWN' and func_name == 'nft_do_chain':
+                    print(f"[SessionStats {self.session_id}] TRACKED to node '{pipeline_layer}': verdict={verdict_name}, func={func_name}")
 
             # Update total packets (count unique packets, not events)
             self.total_packets = max(self.total_packets, sum(h['packets_total'] for h in self.hooks.values()) // max(len(self.hooks), 1))
