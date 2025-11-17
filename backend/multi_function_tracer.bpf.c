@@ -5,14 +5,6 @@
 
 #include <uapi/linux/ptrace.h>
 #include <linux/sched.h>
-#include <linux/skbuff.h>
-#include <linux/netdevice.h>
-#include <linux/ip.h>
-#include <linux/ipv6.h>
-#include <linux/tcp.h>
-#include <linux/udp.h>
-#include <linux/icmp.h>
-#include <net/sock.h>
 
 typedef unsigned char u8;
 typedef unsigned short u16;
@@ -146,7 +138,8 @@ static __always_inline void read_comm_safe(char *dest, u32 size)
 }
 
 // Extract packet metadata from sk_buff
-static __always_inline int extract_packet_meta_from_skb(struct sk_buff *skb, struct packet_meta *meta)
+// Using hardcoded offsets for BCC compatibility (no struct definitions needed)
+static __always_inline int extract_packet_meta_from_skb(void *skb, struct packet_meta *meta)
 {
     if (!skb || !meta)
         return -1;
@@ -154,65 +147,54 @@ static __always_inline int extract_packet_meta_from_skb(struct sk_buff *skb, str
     // Initialize all fields
     __builtin_memset(meta, 0, sizeof(*meta));
 
-    // Read SKB fields
-    u16 protocol = 0;
+    // Get length (offset 0x88 in sk_buff)
     u32 len = 0;
-    u32 mark = 0;
-
-    bpf_probe_read_kernel(&protocol, sizeof(protocol), &skb->protocol);
-    bpf_probe_read_kernel(&len, sizeof(len), &skb->len);
-    bpf_probe_read_kernel(&mark, sizeof(mark), &skb->mark);
-
+    bpf_probe_read_kernel(&len, sizeof(len), (char *)skb + 0x88);
     meta->length = len;
-    meta->mark = mark;
-    meta->protocol = (protocol >> 8) & 0xFF;  // Network to host order
 
-    // Extract network device info
-    struct net_device *dev = NULL;
-    bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev);
-    if (dev) {
-        u32 ifindex = 0;
-        bpf_probe_read_kernel(&ifindex, sizeof(ifindex), &dev->ifindex);
-        meta->ifindex = ifindex;
-    }
+    // Get mark (offset varies, skip for now)
+    // meta->mark = 0;
 
-    // Parse L3/L4 headers
-    u8 *head = NULL;
-    u16 mac_header = 0;
-    u16 network_header = 0;
+    // Get IP header pointer (offset 0xd0 in sk_buff)
+    void *ip_header = NULL;
+    bpf_probe_read_kernel(&ip_header, sizeof(ip_header), (char *)skb + 0xd0);
 
-    bpf_probe_read_kernel(&head, sizeof(head), &skb->head);
-    bpf_probe_read_kernel(&network_header, sizeof(network_header), &skb->network_header);
+    if (!ip_header)
+        return 0;
 
-    if (!head || network_header == (u16)~0U)
-        return 0;  // No network header
+    // Read IP header fields
+    u8 ihl_version = 0;
+    u8 protocol = 0;
+    u32 saddr = 0;
+    u32 daddr = 0;
 
-    void *nh = head + network_header;
+    bpf_probe_read_kernel(&ihl_version, sizeof(ihl_version), ip_header);
+    u8 version = (ihl_version >> 4) & 0x0F;
 
-    // Parse IP header
-    if (meta->protocol == 0x08) {  // IPv4
-        struct iphdr iph;
-        bpf_probe_read_kernel(&iph, sizeof(iph), nh);
+    if (version != 4)
+        return 0;  // Only IPv4 for now
 
-        meta->src_ip = __builtin_bswap32(iph.saddr);
-        meta->dst_ip = __builtin_bswap32(iph.daddr);
-        meta->protocol = iph.protocol;
+    bpf_probe_read_kernel(&protocol, sizeof(protocol), (char *)ip_header + 9);
+    bpf_probe_read_kernel(&saddr, sizeof(saddr), (char *)ip_header + 12);
+    bpf_probe_read_kernel(&daddr, sizeof(daddr), (char *)ip_header + 16);
 
-        void *l4 = nh + (iph.ihl * 4);
+    meta->protocol = protocol;
+    meta->src_ip = saddr;
+    meta->dst_ip = daddr;
 
-        // Parse TCP/UDP
-        if (iph.protocol == 6) {  // TCP
-            struct tcphdr tcph;
-            bpf_probe_read_kernel(&tcph, sizeof(tcph), l4);
-            meta->src_port = __builtin_bswap16(tcph.source);
-            meta->dst_port = __builtin_bswap16(tcph.dest);
-            meta->flags = 0;  // Could extract TCP flags if needed
-        } else if (iph.protocol == 17) {  // UDP
-            struct udphdr udph;
-            bpf_probe_read_kernel(&udph, sizeof(udph), l4);
-            meta->src_port = __builtin_bswap16(udph.source);
-            meta->dst_port = __builtin_bswap16(udph.dest);
-        }
+    // Extract ports for TCP/UDP
+    if (protocol == 6 || protocol == 17) {  // TCP or UDP
+        u8 ihl = (ihl_version & 0x0F) * 4;
+        void *trans_header = (char *)ip_header + ihl;
+
+        u16 sport = 0;
+        u16 dport = 0;
+
+        bpf_probe_read_kernel(&sport, sizeof(sport), trans_header);
+        bpf_probe_read_kernel(&dport, sizeof(dport), (char *)trans_header + 2);
+
+        meta->src_port = bpf_ntohs(sport);
+        meta->dst_port = bpf_ntohs(dport);
     }
 
     return 0;
@@ -274,15 +256,15 @@ static __always_inline u64 extract_rule_handle(void *expr)
 // Supports up to 5 parameter positions (like pwru)
 static __always_inline int trace_skb_generic(struct pt_regs *ctx, int param_pos)
 {
-    struct sk_buff *skb = NULL;
+    void *skb = NULL;
 
     // Read SKB from specified parameter position
     switch (param_pos) {
-        case 1: skb = (struct sk_buff *)PT_REGS_PARM1(ctx); break;
-        case 2: skb = (struct sk_buff *)PT_REGS_PARM2(ctx); break;
-        case 3: skb = (struct sk_buff *)PT_REGS_PARM3(ctx); break;
-        case 4: skb = (struct sk_buff *)PT_REGS_PARM4(ctx); break;
-        case 5: skb = (struct sk_buff *)PT_REGS_PARM5(ctx); break;
+        case 1: skb = (void *)PT_REGS_PARM1(ctx); break;
+        case 2: skb = (void *)PT_REGS_PARM2(ctx); break;
+        case 3: skb = (void *)PT_REGS_PARM3(ctx); break;
+        case 4: skb = (void *)PT_REGS_PARM4(ctx); break;
+        case 5: skb = (void *)PT_REGS_PARM5(ctx); break;
         default: return 0;
     }
 
@@ -340,27 +322,23 @@ static __always_inline int trace_skb_generic(struct pt_regs *ctx, int param_pos)
 }
 
 // Multiple kprobe entry points for different parameter positions
-SEC("kprobe/skb_1")
+// BCC compatible - no SEC() macro needed
 int kprobe_skb_1(struct pt_regs *ctx) {
     return trace_skb_generic(ctx, 1);
 }
 
-SEC("kprobe/skb_2")
 int kprobe_skb_2(struct pt_regs *ctx) {
     return trace_skb_generic(ctx, 2);
 }
 
-SEC("kprobe/skb_3")
 int kprobe_skb_3(struct pt_regs *ctx) {
     return trace_skb_generic(ctx, 3);
 }
 
-SEC("kprobe/skb_4")
 int kprobe_skb_4(struct pt_regs *ctx) {
     return trace_skb_generic(ctx, 4);
 }
 
-SEC("kprobe/skb_5")
 int kprobe_skb_5(struct pt_regs *ctx) {
     return trace_skb_generic(ctx, 5);
 }
@@ -377,7 +355,7 @@ int kprobe__nft_do_chain(struct pt_regs *ctx)
         return 0;
 
     // Read sk_buff from nft_pktinfo.skb (offset 0)
-    struct sk_buff *skb = NULL;
+    void *skb = NULL;
     bpf_probe_read_kernel(&skb, sizeof(skb), pkt);
     if (!skb)
         return 0;
@@ -446,7 +424,7 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
         return 0;
 
     // Read sk_buff from pktinfo
-    struct sk_buff *skb = NULL;
+    void *skb = NULL;
     bpf_probe_read_kernel(&skb, sizeof(skb), pktinfo);
     if (!skb)
         return 0;
