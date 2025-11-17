@@ -156,21 +156,11 @@ static __always_inline void extract_packet_info(struct sk_buff *skb, struct pack
     bpf_probe_read_kernel(&len, sizeof(len), (char *)skb + 0x88);
     pkt->length = len;
 
-    // Read sk_buff header pointers properly
-    // skb->head is at offset ~0xd0 (kernel 5.x)
-    void *head = NULL;
-    bpf_probe_read_kernel(&head, sizeof(head), (char *)skb + 0xd0);
+    void *ip_header = NULL;
+    bpf_probe_read_kernel(&ip_header, sizeof(ip_header), (char *)skb + 0xd0);
 
-    if (!head)
+    if (!ip_header)
         return;
-
-    // skb->network_header is at offset ~0xb0 (u16)
-    u16 network_header_offset = 0;
-    bpf_probe_read_kernel(&network_header_offset, sizeof(network_header_offset),
-                          (char *)skb + 0xb0);
-
-    // Calculate actual IP header address: head + network_header_offset
-    void *ip_header = (char *)head + network_header_offset;
 
     u8 ihl_version = 0;
     bpf_probe_read_kernel(&ihl_version, sizeof(ihl_version), ip_header);
@@ -192,14 +182,8 @@ static __always_inline void extract_packet_info(struct sk_buff *skb, struct pack
     pkt->dst_ip = daddr;
 
     if (protocol == 6 || protocol == 17) {
-        // Read transport_header offset directly from sk_buff
-        // skb->transport_header is at offset ~0xb2 (u16)
-        u16 transport_header_offset = 0;
-        bpf_probe_read_kernel(&transport_header_offset, sizeof(transport_header_offset),
-                              (char *)skb + 0xb2);
-
-        // Calculate actual transport header address: head + transport_header_offset
-        void *trans_header = (char *)head + transport_header_offset;
+        u8 ihl = (ihl_version & 0x0F) * 4;
+        void *trans_header = (char *)ip_header + ihl;
 
         u16 sport = 0;
         u16 dport = 0;
