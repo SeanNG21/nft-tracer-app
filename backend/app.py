@@ -11,6 +11,7 @@ import json
 import time
 import threading
 import socket
+import struct
 import platform
 from datetime import datetime
 from collections import defaultdict
@@ -969,7 +970,9 @@ class TraceSession:
         self.bpf_multifunction = None
         self.thread = None
 
-        self.packet_traces: Dict[int, PacketTrace] = {}
+        # FIX: Use composite key (skb_addr + 5-tuple) instead of just skb_addr
+        # This prevents different packets from being merged when kernel reuses SKB addresses
+        self.packet_traces: Dict[str, PacketTrace] = {}
         self.completed_traces: List[PacketTrace] = []
         self.lock = threading.Lock()
 
@@ -1404,18 +1407,20 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                 break
 
     def _cleanup_old_traces(self):
+        """Cleanup old packet traces based on timeout"""
         while self.running:
             time.sleep(2)
             now = time.time_ns()
             to_complete = []
-            
+
             with self.lock:
-                for skb_addr, trace in list(self.packet_traces.items()):
+                # packet_key is now composite key (skb_addr + 5-tuple) in string format
+                for packet_key, trace in list(self.packet_traces.items()):
                     if now - trace.last_seen > self.trace_timeout_ns:
-                        to_complete.append(skb_addr)
-                
-                for skb_addr in to_complete:
-                    trace = self.packet_traces.pop(skb_addr)
+                        to_complete.append(packet_key)
+
+                for packet_key in to_complete:
+                    trace = self.packet_traces.pop(packet_key)
                     self.completed_traces.append(trace)
     
     def _handle_nft_event(self, cpu, data, size):
@@ -1425,16 +1430,19 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
         with self.lock:
             self.total_events += 1
             self._update_stats()
-            
+
             skb_addr = self._get_skb_addr(nft_event.skb_addr, nft_event.chain_addr)
-            
-            if skb_addr not in self.packet_traces:
-                self.packet_traces[skb_addr] = PacketTrace(
+
+            # NFT events don't have packet info, so use skb_addr as key (hex string)
+            packet_key = f"{skb_addr:x}"
+
+            if packet_key not in self.packet_traces:
+                self.packet_traces[packet_key] = PacketTrace(
                     skb_addr=skb_addr, first_seen=nft_event.timestamp,
                     last_seen=nft_event.timestamp, events=[], mode="nft"
                 )
-            
-            trace = self.packet_traces[skb_addr]
+
+            trace = self.packet_traces[packet_key]
             trace.add_nft_event(nft_event)
 
             # FIX: Cleanup on terminal verdicts DROP/STOLEN regardless of chain_depth
@@ -1444,7 +1452,7 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
             if nft_event.trace_type == 0:  # chain_exit event
                 if nft_event.verdict in [0, 2]:  # DROP or STOLEN
                     self.completed_traces.append(trace)
-                    del self.packet_traces[skb_addr]
+                    del self.packet_traces[packet_key]
     
     def _handle_full_event(self, cpu, data, size):
         """Handle FULL mode event + REALTIME INTEGRATION"""
@@ -1468,22 +1476,28 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
             ]
         
         event = ct.cast(data, ct.POINTER(FullEvent)).contents
-        
+
         with self.lock:
             self.total_events += 1
             self._update_stats()
-            
+
             skb_addr = event.skb_addr if event.skb_addr != 0 else event.chain_addr
             if skb_addr == 0:
                 return
-            
-            if skb_addr not in self.packet_traces:
-                self.packet_traces[skb_addr] = PacketTrace(
+
+            # FIX: Use composite key (skb_addr + 5-tuple) for packet identification
+            packet_key = self._make_packet_key(
+                skb_addr, event.src_ip, event.dst_ip,
+                event.src_port, event.dst_port, event.protocol
+            )
+
+            if packet_key not in self.packet_traces:
+                self.packet_traces[packet_key] = PacketTrace(
                     skb_addr=skb_addr, first_seen=event.timestamp,
                     last_seen=event.timestamp, events=[], mode="full"
                 )
-            
-            trace = self.packet_traces[skb_addr]
+
+            trace = self.packet_traces[packet_key]
             
             if event.event_type == 0:  # Function call
                 func_name = kallsyms.lookup(event.func_ip)
@@ -1565,9 +1579,9 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                 # Same logic as NFT mode: DROP/STOLEN are terminal, cleanup immediately
                 if event.event_type == 1:  # chain_exit event
                     if event.verdict in [0, 2]:  # DROP or STOLEN
-                        if skb_addr in self.packet_traces:
+                        if packet_key in self.packet_traces:
                             self.completed_traces.append(trace)
-                            del self.packet_traces[skb_addr]
+                            del self.packet_traces[packet_key]
     
     def _handle_universal_event(self, cpu, data, size):
         event = self.bpf_universal["events"].event(data)
@@ -1587,18 +1601,24 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
             self.total_events += 1
             self.events_by_func[func_name] += 1
             self._update_stats()
-            
+
             skb_addr = event.skb_addr
             if skb_addr == 0:
                 return
-            
-            if skb_addr not in self.packet_traces:
-                self.packet_traces[skb_addr] = PacketTrace(
+
+            # FIX: Use composite key for packet identification
+            packet_key = self._make_packet_key(
+                skb_addr, event.saddr, event.daddr,
+                event.sport, event.dport, event.protocol
+            )
+
+            if packet_key not in self.packet_traces:
+                self.packet_traces[packet_key] = PacketTrace(
                     skb_addr=skb_addr, first_seen=event.timestamp,
                     last_seen=event.timestamp, events=[], mode="universal"
                 )
-            
-            trace = self.packet_traces[skb_addr]
+
+            trace = self.packet_traces[packet_key]
             trace.add_universal_event(universal_event)
 
     def _handle_multifunction_event(self, cpu, data, size):
@@ -1666,13 +1686,19 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
             if skb_addr == 0:
                 return
 
-            if skb_addr not in self.packet_traces:
-                self.packet_traces[skb_addr] = PacketTrace(
+            # FIX: Use composite key for packet identification
+            packet_key = self._make_packet_key(
+                skb_addr, event.src_ip, event.dst_ip,
+                event.src_port, event.dst_port, event.protocol
+            )
+
+            if packet_key not in self.packet_traces:
+                self.packet_traces[packet_key] = PacketTrace(
                     skb_addr=skb_addr, first_seen=event.timestamp,
                     last_seen=event.timestamp, events=[], mode="multifunction"
                 )
 
-            trace = self.packet_traces[skb_addr]
+            trace = self.packet_traces[packet_key]
 
             if event.event_type == 0:  # Function call
                 universal_event = UniversalEvent(
@@ -1707,9 +1733,9 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                 # Same logic: DROP/STOLEN are terminal, cleanup immediately
                 if event.event_type == 1:  # chain_exit event
                     if event.verdict in [0, 2]:  # DROP or STOLEN
-                        if skb_addr in self.packet_traces:
+                        if packet_key in self.packet_traces:
                             self.completed_traces.append(trace)
-                            del self.packet_traces[skb_addr]
+                            del self.packet_traces[packet_key]
 
     def _get_skb_addr(self, skb_addr: int, chain_addr: int) -> int:
         if skb_addr == 0:
@@ -1721,7 +1747,31 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                 self.synthetic_id_counter -= 1
                 return addr
         return skb_addr
-    
+
+    def _make_packet_key(self, skb_addr: int, src_ip: int, dst_ip: int,
+                         src_port: int, dst_port: int, protocol: int) -> str:
+        """
+        Create composite key for packet identification using 5-tuple + skb_addr.
+        This prevents different packets from being merged when kernel reuses SKB addresses.
+
+        Format: {skb_addr}:{protocol}:{src_ip}:{src_port}:{dst_ip}:{dst_port}
+        Fallback: If packet info not available (0.0.0.0:0), use just skb_addr
+        """
+        # If no packet info yet, fallback to skb_addr only
+        if src_ip == 0 and dst_ip == 0 and src_port == 0 and dst_port == 0:
+            return f"{skb_addr:x}"
+
+        # Format IPs from int to string
+        try:
+            src_ip_str = socket.inet_ntoa(struct.pack('<I', src_ip)) if src_ip else "0.0.0.0"
+            dst_ip_str = socket.inet_ntoa(struct.pack('<I', dst_ip)) if dst_ip else "0.0.0.0"
+        except:
+            src_ip_str = "0.0.0.0"
+            dst_ip_str = "0.0.0.0"
+
+        # Create composite key
+        return f"{skb_addr:x}:{protocol}:{src_ip_str}:{src_port}:{dst_ip_str}:{dst_port}"
+
     def _update_stats(self):
         now = time.time()
         if now - self.last_stats_time >= 1.0:
