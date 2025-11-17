@@ -59,6 +59,7 @@ except ImportError as e:
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 NFT_TRACER_PATH = os.path.join(os.path.dirname(__file__), "nft_tracer.bpf.c")
 FULL_TRACER_PATH = os.path.join(os.path.dirname(__file__), "full_tracer.bpf.c")
+MULTI_FUNCTION_TRACER_PATH = os.path.join(os.path.dirname(__file__), "multi_function_nft_trace_v2.bpf.c")
 FUNCTIONS_CACHE = os.path.join(os.path.dirname(__file__), "skb_functions.json")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -512,7 +513,7 @@ int trace_skb_func(struct pt_regs *ctx, struct sk_buff *skb) {
 class TraceSession:
     """Manages trace session - supports nft, universal, full modes"""
     
-    def __init__(self, session_id: str, mode: str = "nft", pcap_filter: str = "", 
+    def __init__(self, session_id: str, mode: str = "nft", pcap_filter: str = "",
                  max_functions: int = 30):
         self.session_id = session_id
         self.mode = mode
@@ -524,6 +525,7 @@ class TraceSession:
         self.bpf_nft = None
         self.bpf_universal = None
         self.bpf_full = None
+        self.bpf_multi_function = None
         self.thread = None
         
         self.packet_traces: Dict[int, PacketTrace] = {}
@@ -553,7 +555,7 @@ class TraceSession:
     def start(self) -> bool:
         if not BCC_AVAILABLE:
             return False
-        
+
         try:
             if self.mode == 'nft':
                 return self._start_nft_only()
@@ -561,10 +563,12 @@ class TraceSession:
                 return self._start_universal_only()
             elif self.mode == 'full':
                 return self._start_full_mode()
+            elif self.mode == 'multi_function':
+                return self._start_multi_function_mode()
             else:
                 print(f"[ERROR] Unknown mode: {self.mode}")
                 return False
-                
+
         except Exception as e:
             print(f"[ERROR] Starting session: {e}")
             import traceback
@@ -664,7 +668,107 @@ class TraceSession:
         
         print("[✓] FULL MODE READY!")
         return True
-    
+
+    def _start_multi_function_mode(self) -> bool:
+        """Start multi-function tracer v2 with improved packet parsing"""
+        print("[*] Starting MULTI-FUNCTION mode (Enhanced multi-function packet tracer)...")
+
+        # Load functions to trace
+        functions_to_trace = []
+        critical_filtered = [f for f in CRITICAL_FUNCTIONS if not is_blacklisted(f)]
+        print(f"[*] Priority: {len(critical_filtered)} critical path functions")
+        functions_to_trace.extend(critical_filtered)
+
+        remaining_slots = self.max_functions - len(critical_filtered)
+        if remaining_slots > 0 and os.path.exists(FUNCTIONS_CACHE):
+            print(f"[*] Adding {remaining_slots} additional discovered functions...")
+            with open(FUNCTIONS_CACHE, 'r') as f:
+                data = json.load(f)
+                all_funcs = data.get('functions', [])
+                sorted_funcs = sorted(all_funcs, key=lambda x: (x['priority'], x['name']))
+
+                for func in sorted_funcs:
+                    func_name = func['name']
+                    if func_name in functions_to_trace:
+                        continue
+                    if is_blacklisted(func_name):
+                        continue
+                    functions_to_trace.append(func_name)
+                    if len(functions_to_trace) >= self.max_functions:
+                        break
+
+        self.functions = functions_to_trace
+        print(f"[*] Total functions to trace: {len(self.functions)}")
+
+        # Load BPF program
+        with open(MULTI_FUNCTION_TRACER_PATH, 'r') as f:
+            bpf_code = f.read()
+
+        self.bpf_multi_function = BPF(text=bpf_code)
+
+        # Populate function metadata map
+        print("[*] Populating function metadata...")
+        func_meta = self.bpf_multi_function.get_table("func_meta")
+        for idx, func_name in enumerate(self.functions):
+            meta = func_meta.Leaf()
+            # Determine layer from critical functions
+            layer = "Unknown"
+            if any(net in func_name for net in ['netif_receive', '__netif_receive']):
+                layer = "Device"
+            elif any(ip in func_name for ip in ['ip_rcv', 'ip_local', 'ip_forward', 'ip_output']):
+                layer = "IPv4"
+            elif any(tcp in func_name for tcp in ['tcp_v4', 'tcp_rcv']):
+                layer = "TCP"
+            elif any(udp in func_name for udp in ['udp_rcv', 'udp_unicast']):
+                layer = "UDP"
+            elif 'nf_' in func_name or 'nft_' in func_name:
+                layer = "Netfilter"
+
+            meta.name = func_name.encode('utf-8')[:63] + b'\x00'
+            meta.layer = layer.encode('utf-8')[:15] + b'\x00'
+            meta.priority = 0
+            func_meta[func_meta.Key(idx)] = meta
+
+        # Attach kprobes to kernel functions
+        print("[*] Attaching packet path functions...")
+        attached_critical = 0
+        attached_additional = 0
+
+        for idx, func_name in enumerate(self.functions):
+            try:
+                wrapper_name = f"trace_{idx}"
+                self.bpf_multi_function.attach_kprobe(event=func_name, fn_name=wrapper_name)
+                if func_name in critical_filtered:
+                    attached_critical += 1
+                else:
+                    attached_additional += 1
+            except Exception as e:
+                pass
+
+        print(f"[✓] Attached {attached_critical}/{len(critical_filtered)} critical functions")
+        print(f"[✓] Attached {attached_additional} additional functions")
+
+        # NFT hooks are auto-attached via naming convention
+        print("[✓] NFT hooks attached (nft_do_chain, nft_immediate_eval, nf_hook_slow)")
+
+        # Open perf buffer
+        self.bpf_multi_function["events"].open_perf_buffer(
+            self._handle_multi_function_event,
+            page_cnt=256  # Large buffer for high-volume events
+        )
+
+        self.running = True
+        self.thread = threading.Thread(target=self._poll_multi_function_events)
+        self.thread.daemon = True
+        self.thread.start()
+
+        self.cleanup_thread = threading.Thread(target=self._cleanup_old_traces)
+        self.cleanup_thread.daemon = True
+        self.cleanup_thread.start()
+
+        print("[✓] MULTI-FUNCTION MODE READY!")
+        return True
+
     def _start_universal_tracer(self) -> bool:
         if os.path.exists(FUNCTIONS_CACHE):
             with open(FUNCTIONS_CACHE, 'r') as f:
@@ -736,7 +840,13 @@ class TraceSession:
                 self.bpf_full.cleanup()
             except:
                 pass
-        
+
+        if hasattr(self, 'bpf_multi_function') and self.bpf_multi_function:
+            try:
+                self.bpf_multi_function.cleanup()
+            except:
+                pass
+
         return output_path
     
     def _poll_nft_events(self):
@@ -765,7 +875,16 @@ class TraceSession:
                 if self.running:
                     print(f"[ERROR] FULL mode polling: {e}")
                 break
-    
+
+    def _poll_multi_function_events(self):
+        while self.running:
+            try:
+                self.bpf_multi_function.perf_buffer_poll(timeout=100)
+            except Exception as e:
+                if self.running:
+                    print(f"[ERROR] Multi-function mode polling: {e}")
+                break
+
     def _cleanup_old_traces(self):
         while self.running:
             time.sleep(2)
@@ -947,7 +1066,148 @@ class TraceSession:
             
             trace = self.packet_traces[skb_addr]
             trace.add_universal_event(universal_event)
-    
+
+    def _handle_multi_function_event(self, cpu, data, size):
+        """Handle multi-function tracer v2 events with enhanced packet parsing"""
+        event = self.bpf_multi_function["events"].event(data)
+
+        with self.lock:
+            self.total_events += 1
+            self._update_stats()
+
+            # Determine event type (0=FUNCTION, 1=NFT_CHAIN, 2=NFT_RULE, 3=NF_HOOK)
+            event_type = event.event_type
+
+            # Get or create packet trace
+            skb_addr = event.skb_addr if event.skb_addr != 0 else event.chain_addr
+            if skb_addr == 0:
+                return
+
+            if skb_addr not in self.packet_traces:
+                self.packet_traces[skb_addr] = PacketTrace(
+                    skb_addr=skb_addr, first_seen=event.timestamp,
+                    last_seen=event.timestamp, events=[], mode="multi_function"
+                )
+
+            trace = self.packet_traces[skb_addr]
+
+            # Create event dictionary with enhanced fields
+            event_dict = {
+                'timestamp': event.timestamp,
+                'cpu_id': event.cpu_id,
+                'pid': event.pid,
+                'event_type': event_type,
+                'hook': event.hook,
+                'pf': event.pf,
+                'protocol': event.protocol,
+                'src_ip': trace._format_ip(event.src_ip),
+                'dst_ip': trace._format_ip(event.dst_ip),
+                'src_port': event.src_port,
+                'dst_port': event.dst_port,
+                'length': event.length,
+                'func_name': event.func_name.decode('utf-8', errors='ignore').rstrip('\x00'),
+                'layer': event.layer.decode('utf-8', errors='ignore').rstrip('\x00'),
+                'comm': event.comm.decode('utf-8', errors='ignore'),
+                # Enhanced packet parsing fields
+                'is_non_ip': event.is_non_ip,
+                'parse_failed': event.parse_failed,
+                'eth_protocol': hex(event.eth_protocol) if event.eth_protocol else None,
+                'ip_version': event.ip_version if event.ip_version else None,
+            }
+
+            # Handle different event types
+            if event_type == 0:  # FUNCTION call
+                func_name = event_dict['func_name']
+                self.events_by_func[func_name] += 1
+
+                event_dict['trace_type'] = 'function_call'
+                trace.events.append(event_dict)
+                trace.last_seen = event.timestamp
+
+                if func_name not in trace.functions_called:
+                    trace.functions_called.append(func_name)
+                    trace.unique_functions = len(trace.functions_called)
+
+                # Update packet info if not already set
+                if trace.protocol is None and event.protocol > 0 and not event.is_non_ip:
+                    trace.protocol = event.protocol
+                    trace.src_ip = event_dict['src_ip']
+                    trace.dst_ip = event_dict['dst_ip']
+                    trace.src_port = event.src_port if event.src_port > 0 else None
+                    trace.dst_port = event.dst_port if event.dst_port > 0 else None
+
+                # Realtime integration
+                if REALTIME_AVAILABLE and realtime:
+                    try:
+                        realtime.process_session_event({
+                            'hook': event.hook,
+                            'func_name': func_name,
+                            'verdict': event.verdict if hasattr(event, 'verdict') else None,
+                            'protocol': event.protocol,
+                            'src_ip': event_dict['src_ip'],
+                            'dst_ip': event_dict['dst_ip'],
+                            'timestamp': time.time()
+                        }, self.session_id)
+                    except:
+                        pass
+
+            elif event_type in [1, 2, 3]:  # NFT events (CHAIN, RULE, HOOK)
+                # Map to trace types
+                trace_type_map = {1: 'chain_exit', 2: 'rule_eval', 3: 'hook_exit'}
+                event_dict['trace_type'] = trace_type_map.get(event_type, 'unknown')
+                event_dict['verdict'] = trace._verdict_str(event.verdict)
+                event_dict['verdict_code'] = event.verdict
+                event_dict['verdict_raw'] = event.verdict_raw
+                event_dict['rule_seq'] = event.rule_seq
+                event_dict['rule_handle'] = event.rule_handle
+                event_dict['chain_addr'] = hex(event.chain_addr) if event.chain_addr > 0 else None
+                event_dict['expr_addr'] = hex(event.expr_addr) if event.expr_addr > 0 else None
+                event_dict['chain_depth'] = event.chain_depth
+
+                trace.events.append(event_dict)
+                trace.last_seen = event.timestamp
+
+                # Update packet info
+                if trace.protocol is None and event.protocol > 0 and not event.is_non_ip:
+                    trace.protocol = event.protocol
+                    trace.src_ip = event_dict['src_ip']
+                    trace.dst_ip = event_dict['dst_ip']
+                    trace.src_port = event.src_port if event.src_port > 0 else None
+                    trace.dst_port = event.dst_port if event.dst_port > 0 else None
+
+                if event.hook != 255 and trace.hook is None:
+                    trace.hook = event.hook
+
+                # Update final verdict
+                if event_type == 1:  # chain_exit
+                    trace.final_verdict = event.verdict
+                    trace.final_verdict_str = trace._verdict_str(event.verdict)
+
+                # Count rules
+                if event_type == 2:  # rule_eval
+                    trace.total_rules_evaluated += 1
+
+                # Realtime integration
+                if REALTIME_AVAILABLE and realtime:
+                    try:
+                        realtime.process_session_event({
+                            'hook': event.hook,
+                            'func_name': 'nft_do_chain',
+                            'verdict': event.verdict,
+                            'protocol': event.protocol,
+                            'src_ip': event_dict['src_ip'],
+                            'dst_ip': event_dict['dst_ip'],
+                            'timestamp': time.time()
+                        }, self.session_id)
+                    except:
+                        pass
+
+                # Complete trace if final verdict reached
+                if event_type == 1 and event.verdict in [0, 1]:
+                    if skb_addr in self.packet_traces:
+                        self.completed_traces.append(trace)
+                        del self.packet_traces[skb_addr]
+
     def _get_skb_addr(self, skb_addr: int, chain_addr: int) -> int:
         if skb_addr == 0:
             self.skb_zero_count += 1
@@ -986,16 +1246,16 @@ class TraceSession:
             'traces': [trace.to_summary() for trace in self.completed_traces]
         }
         
-        if self.mode in ['universal', 'full']:
+        if self.mode in ['universal', 'full', 'multi_function']:
             summary['statistics'].update({
                 'functions_traced': len(self.functions),
                 'functions_hit': len(self.events_by_func),
-                'top_functions': dict(sorted(self.events_by_func.items(), 
+                'top_functions': dict(sorted(self.events_by_func.items(),
                                             key=lambda x: x[1], reverse=True)[:20])
             })
             summary['functions_list'] = self.functions
-        
-        if self.mode in ['nft', 'full']:
+
+        if self.mode in ['nft', 'full', 'multi_function']:
             drops = sum(1 for t in self.completed_traces if t.final_verdict == 0)
             accepts = sum(1 for t in self.completed_traces if t.final_verdict == 1)
             summary['statistics'].update({
@@ -1017,8 +1277,8 @@ class TraceSession:
                 'events_per_second': self.events_per_second,
                 'active_packets': len(self.packet_traces),
                 'completed_packets': len(self.completed_traces),
-                'functions_traced': len(self.functions) if self.mode in ['universal', 'full'] else 0,
-                'functions_hit': len(self.events_by_func) if self.mode in ['universal', 'full'] else 0,
+                'functions_traced': len(self.functions) if self.mode in ['universal', 'full', 'multi_function'] else 0,
+                'functions_hit': len(self.events_by_func) if self.mode in ['universal', 'full', 'multi_function'] else 0,
                 'start_time': self.start_time.isoformat(),
                 'uptime_seconds': (datetime.now() - self.start_time).total_seconds()
             }
@@ -1124,14 +1384,14 @@ def create_session():
     data = request.json
     session_id = data.get('session_id', f"trace_{int(time.time() * 1000)}")
     mode = data.get('mode', 'nft')
-    
-    if mode not in ['nft', 'universal', 'full']:
-        return jsonify({'error': 'Invalid mode. Use: nft, universal, or full'}), 400
-    
+
+    if mode not in ['nft', 'universal', 'full', 'multi_function']:
+        return jsonify({'error': 'Invalid mode. Use: nft, universal, full, or multi_function'}), 400
+
     success = session_manager.create_session(
         session_id, mode, data.get('pcap_filter', ''), data.get('max_functions', 30)
     )
-    
+
     if success:
         return jsonify({'status': 'started', 'session_id': session_id, 'mode': mode}), 201
     return jsonify({'error': 'Failed to start'}), 400
@@ -1175,13 +1435,16 @@ def list_files():
 def get_modes():
     return jsonify({
         'modes': [
-            {'id': 'nft', 'name': 'NFT Tracer', 
+            {'id': 'nft', 'name': 'NFT Tracer',
              'description': 'Trace nftables rules và verdicts'},
-            {'id': 'universal', 'name': 'Universal Tracer', 
+            {'id': 'universal', 'name': 'Universal Tracer',
              'description': 'Trace đường đi packet qua kernel functions'},
-            {'id': 'full', 'name': 'Full Tracer (Recommended)', 
-             'description': 'Trace ĐẦY ĐỦ: đường đi + verdict cuối cùng',
-             'recommended': True}
+            {'id': 'full', 'name': 'Full Tracer',
+             'description': 'Trace ĐẦY ĐỦ: đường đi + verdict cuối cùng'},
+            {'id': 'multi_function', 'name': 'Multi-Function Tracer V2 (Recommended)',
+             'description': 'Enhanced packet tracer với improved parsing, non-IP support, realtime stats',
+             'recommended': True,
+             'features': ['Proper packet parsing', 'Non-IP support (ARP, bridge)', 'Parse failure detection', 'Ethernet protocol identification', 'IP version tracking', 'Multi-layer function tracking']}
         ]
     })
 
@@ -1471,9 +1734,11 @@ if __name__ == '__main__':
     print(f"Hostname: {socket.gethostname()}")
     print("=" * 70)
     print("MODES:")
-    print("  • nft      - NFT rules only")
-    print("  • universal - Kernel functions only")
-    print("  • full     - ĐƯỜNG ĐI + VERDICT (recommended!)")
+    print("  • nft            - NFT rules only")
+    print("  • universal      - Kernel functions only")
+    print("  • full           - Functions + NFT verdicts")
+    print("  • multi_function - Enhanced multi-function tracer V2 (RECOMMENDED!)")
+    print("                     Features: improved parsing, non-IP support, parse failure detection")
     print("=" * 70)
     
     if REALTIME_AVAILABLE:
