@@ -800,67 +800,6 @@ function SessionRealtimeStats({ sessionId }) {
         </div>
       )}
 
-      {/* Recent Events Table */}
-      {stats.recent_events && stats.recent_events.length > 0 && (
-        <div className="realtime-panel full-width">
-          <h3>📝 Recent Events (Last 10)</h3>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
-              <thead>
-                <tr style={{ background: '#f8f9fa', borderBottom: '2px solid #dee2e6' }}>
-                  <th style={{ padding: '0.75rem', textAlign: 'left', color: '#666', fontWeight: '600' }}>Type</th>
-                  <th style={{ padding: '0.75rem', textAlign: 'left', color: '#666', fontWeight: '600' }}>Function/Hook</th>
-                  <th style={{ padding: '0.75rem', textAlign: 'left', color: '#666', fontWeight: '600' }}>Verdict</th>
-                  <th style={{ padding: '0.75rem', textAlign: 'left', color: '#666', fontWeight: '600' }}>Protocol</th>
-                  <th style={{ padding: '0.75rem', textAlign: 'left', color: '#666', fontWeight: '600' }}>Flow</th>
-                </tr>
-              </thead>
-              <tbody>
-                {stats.recent_events.slice(-10).reverse().map((evt, idx) => (
-                  <tr key={idx} style={{ borderBottom: '1px solid #e9ecef' }}>
-                    <td style={{ padding: '0.75rem' }}>
-                      <span style={{
-                        padding: '0.25rem 0.5rem',
-                        borderRadius: '4px',
-                        fontSize: '0.75rem',
-                        fontWeight: '600',
-                        background: evt.type === 'nft' ? '#e8d5f5' : '#d5e8f5',
-                        color: evt.type === 'nft' ? '#6f42c1' : '#0066cc'
-                      }}>
-                        {evt.type || '-'}
-                      </span>
-                    </td>
-                    <td style={{ padding: '0.75rem', fontFamily: 'monospace', fontSize: '0.85rem' }}>
-                      {evt.func_name || evt.hook_name || '-'}
-                    </td>
-                    <td style={{ padding: '0.75rem' }}>
-                      <span style={{
-                        padding: '0.25rem 0.5rem',
-                        borderRadius: '4px',
-                        fontSize: '0.75rem',
-                        fontWeight: '600',
-                        background: evt.verdict_name === 'ACCEPT' ? '#d4edda' : 
-                                   evt.verdict_name === 'DROP' ? '#f8d7da' : '#e9ecef',
-                        color: evt.verdict_name === 'ACCEPT' ? '#155724' : 
-                               evt.verdict_name === 'DROP' ? '#721c24' : '#666'
-                      }}>
-                        {evt.verdict_name || '-'}
-                      </span>
-                    </td>
-                    <td style={{ padding: '0.75rem', fontSize: '0.85rem', color: '#666' }}>
-                      {evt.protocol || '-'}
-                    </td>
-                    <td style={{ padding: '0.75rem', fontFamily: 'monospace', fontSize: '0.8rem', color: '#495057' }}>
-                      {evt.src_ip && evt.dst_ip ? `${evt.src_ip} → ${evt.dst_ip}` : '-'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
       {/* Info Footer */}
       <div className="realtime-panel full-width">
         <div className="empty-events">
