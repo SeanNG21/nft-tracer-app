@@ -1437,15 +1437,12 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
             trace = self.packet_traces[skb_addr]
             trace.add_nft_event(nft_event)
 
-            # FIX: Only cleanup on final chain_exit with terminal DROP/STOLEN
-            # A packet may traverse multiple hooks (PREROUTING->INPUT or OUTPUT->POSTROUTING)
-            # Each hook has its own chain_exit. Only cleanup at the FINAL chain_exit to avoid
-            # splitting events from the same packet into multiple logs.
-            # - chain_depth = 0: exiting base chain (not nested jump)
-            # - verdict DROP (0) or STOLEN (2): packet lifecycle truly ends
-            # - ACCEPT (1) means packet continues to next hook, so don't cleanup yet
-            if nft_event.trace_type == 0 and nft_event.chain_depth == 0:
-                if nft_event.verdict in [0, 2]:  # Only DROP and STOLEN are final
+            # FIX: Cleanup on terminal verdicts DROP/STOLEN regardless of chain_depth
+            # DROP (0) and STOLEN (2) are terminal verdicts that END packet lifecycle
+            # ACCEPT (1) means packet continues, so rely on timeout cleanup
+            # Must cleanup immediately to prevent SKB address reuse from mixing packets
+            if nft_event.trace_type == 0:  # chain_exit event
+                if nft_event.verdict in [0, 2]:  # DROP or STOLEN
                     self.completed_traces.append(trace)
                     del self.packet_traces[skb_addr]
     
@@ -1564,10 +1561,10 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                         # Silent fail - don't break session if realtime fails
                         pass
 
-                # FIX: Only cleanup on final chain_exit to avoid splitting packet events
-                # Same logic as NFT mode: chain_depth=0 + terminal DROP/STOLEN verdict
-                if event.event_type == 1 and event.chain_depth == 0:
-                    if event.verdict in [0, 2]:  # Only DROP and STOLEN are final
+                # FIX: Cleanup on terminal verdicts regardless of chain_depth
+                # Same logic as NFT mode: DROP/STOLEN are terminal, cleanup immediately
+                if event.event_type == 1:  # chain_exit event
+                    if event.verdict in [0, 2]:  # DROP or STOLEN
                         if skb_addr in self.packet_traces:
                             self.completed_traces.append(trace)
                             del self.packet_traces[skb_addr]
@@ -1706,10 +1703,10 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                 )
                 trace.add_nft_event(nft_event)
 
-                # FIX: Only cleanup on final chain_exit to avoid splitting packet events
-                # Same logic: chain_depth=0 + terminal DROP/STOLEN verdict only
-                if event.event_type == 1 and event.chain_depth == 0:
-                    if event.verdict in [0, 2]:  # Only DROP and STOLEN are final
+                # FIX: Cleanup on terminal verdicts regardless of chain_depth
+                # Same logic: DROP/STOLEN are terminal, cleanup immediately
+                if event.event_type == 1:  # chain_exit event
+                    if event.verdict in [0, 2]:  # DROP or STOLEN
                         if skb_addr in self.packet_traces:
                             self.completed_traces.append(trace)
                             del self.packet_traces[skb_addr]
