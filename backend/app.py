@@ -1021,6 +1021,9 @@ class TraceSession:
 
         self.trace_timeout_ns = 5 * 1_000_000_000
 
+        # Track reference timestamp for cleanup (from first BPF event)
+        self.reference_timestamp_ns = None
+
         print(f"[DEBUG] Session {session_id} created in {mode.upper()} mode")
         print(f"[DEBUG] Excluded ports (no self-tracing): {sorted(EXCLUDED_PORTS)}")
     
@@ -1286,16 +1289,32 @@ class TraceSession:
                 break
 
     def _cleanup_old_traces(self):
+        """
+        Cleanup old packet traces that haven't received events for a while.
+
+        CRITICAL FIX: Use BPF monotonic time (boot time) for comparison, not wall clock time!
+        - trace.last_seen comes from bpf_ktime_get_ns() (nanoseconds since boot)
+        - We need to compare with current BPF time, not time.time_ns() (wall clock)
+
+        Solution: Track the most recent BPF timestamp we've seen, use it as "now"
+        """
         while self.running:
             time.sleep(2)
-            now = time.time_ns()
             to_complete = []
-            
+
             with self.lock:
+                # Use the most recent BPF timestamp we've seen as "now"
+                # This is set by event handlers and represents boot time
+                if self.reference_timestamp_ns is None:
+                    continue  # No events received yet, skip cleanup
+
+                now = self.reference_timestamp_ns
+
                 for skb_addr, trace in list(self.packet_traces.items()):
+                    # Compare BPF time with BPF time (both in nanoseconds since boot)
                     if now - trace.last_seen > self.trace_timeout_ns:
                         to_complete.append(skb_addr)
-                
+
                 for skb_addr in to_complete:
                     trace = self.packet_traces.pop(skb_addr)
                     self.completed_traces.append(trace)
@@ -1303,11 +1322,14 @@ class TraceSession:
     def _handle_nft_event(self, cpu, data, size):
         event = self.bpf_nft["events"].event(data)
         nft_event = NFTEvent.from_bpf_event(event)
-        
+
         with self.lock:
             self.total_events += 1
             self._update_stats()
-            
+
+            # Update reference timestamp for cleanup (BPF monotonic time)
+            self.reference_timestamp_ns = nft_event.timestamp
+
             skb_addr = self._get_skb_addr(nft_event.skb_addr, nft_event.chain_addr)
             
             if skb_addr not in self.packet_traces:
@@ -1346,11 +1368,14 @@ class TraceSession:
             ]
         
         event = ct.cast(data, ct.POINTER(FullEvent)).contents
-        
+
         with self.lock:
             self.total_events += 1
             self._update_stats()
-            
+
+            # Update reference timestamp for cleanup (BPF monotonic time)
+            self.reference_timestamp_ns = event.timestamp
+
             skb_addr = event.skb_addr if event.skb_addr != 0 else event.chain_addr
             if skb_addr == 0:
                 return
@@ -1462,7 +1487,10 @@ class TraceSession:
             self.total_events += 1
             self.events_by_func[func_name] += 1
             self._update_stats()
-            
+
+            # Update reference timestamp for cleanup (BPF monotonic time)
+            self.reference_timestamp_ns = event.timestamp
+
             skb_addr = event.skb_addr
             if skb_addr == 0:
                 return
