@@ -2399,7 +2399,17 @@ if __name__ == '__main__':
         print("[*] WebSocket endpoint: ws://0.0.0.0:5000/socket.io/")
         print("[*] CORS: enabled for all origins")
         print("-" * 70)
-        socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
+        # CRITICAL FIX: Use production-safe config to prevent WebSocket errors
+        # - debug=False to avoid werkzeug conflicts
+        # - use_reloader=False to prevent double initialization
+        socketio.run(
+            app,
+            host='0.0.0.0',
+            port=5000,
+            debug=False,  # Changed from True - prevents werkzeug conflicts
+            use_reloader=False,  # Prevents double initialization
+            log_output=True  # Still log requests
+        )
     else:
         print("\n[✓] Starting standard Flask server (No realtime)")
         print("[*] Server running on http://0.0.0.0:5000")
