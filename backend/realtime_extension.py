@@ -235,7 +235,7 @@ class HookStats:
 
 class RealtimeStats:
     """Aggregated realtime statistics"""
-    
+
     def __init__(self):
         self.hooks: Dict[str, HookStats] = {}
         self.skb_tracking: Dict[str, Dict] = {}
@@ -243,22 +243,93 @@ class RealtimeStats:
         self.total_packets = 0
         self.start_time = time.time()
         self._lock = threading.Lock()
+
+        # NEW: Pipeline stats for Inbound/Outbound visualization
+        self.stats_by_direction_layer = {
+            'Inbound': defaultdict(int),
+            'Outbound': defaultdict(int)
+        }
     
     def get_hook(self, hook_name: str) -> HookStats:
         if hook_name not in self.hooks:
             self.hooks[hook_name] = HookStats()
         return self.hooks[hook_name]
     
+    def _detect_direction(self, hook_name: str, layer_name: str, function: str) -> str:
+        """Detect packet direction (Inbound or Outbound)"""
+        # Hook-based detection
+        if hook_name in ['PRE_ROUTING', 'LOCAL_IN', 'FORWARD']:
+            return 'Inbound'
+        elif hook_name in ['LOCAL_OUT', 'POST_ROUTING']:
+            return 'Outbound'
+
+        # Layer-based detection
+        if layer_name in ['Ingress', 'L2']:
+            return 'Inbound'
+        elif layer_name == 'Egress':
+            return 'Outbound'
+
+        # Function-based detection
+        if function:
+            func_lower = function.lower()
+            if any(kw in func_lower for kw in ['rcv', 'receive', 'input', 'ingress']):
+                return 'Inbound'
+            elif any(kw in func_lower for kw in ['sendmsg', 'xmit', 'transmit', 'output', 'egress']):
+                return 'Outbound'
+
+        # Default to Inbound
+        return 'Inbound'
+
+    def _map_to_pipeline_layer(self, layer_name: str, function: str) -> str:
+        """Map old layer name to new pipeline layer name"""
+        # Direct mappings
+        layer_map = {
+            'Ingress': 'NIC',
+            'L2': 'Driver (NAPI)',
+            'IP': 'Routing Decision',
+            'Firewall': 'Netfilter',
+            'Socket': 'TCP/UDP',
+            'Egress': 'Driver TX'
+        }
+
+        if layer_name in layer_map:
+            return layer_map[layer_name]
+
+        # Function-based detection
+        if function:
+            func_lower = function.lower()
+            if 'napi' in func_lower:
+                return 'Driver (NAPI)'
+            elif 'gro' in func_lower:
+                return 'GRO'
+            elif 'tc' in func_lower:
+                return 'TC Ingress' if 'ingress' in func_lower else 'TC Egress'
+            elif 'conntrack' in func_lower:
+                return 'Conntrack'
+            elif 'nat' in func_lower:
+                return 'NAT'
+            elif 'route' in func_lower:
+                return 'Routing'
+            elif 'tcp' in func_lower or 'udp' in func_lower:
+                return 'TCP/UDP'
+
+        return layer_name
+
     def process_event(self, event: PacketEvent):
         """Process a single packet event and update statistics"""
         with self._lock:
             hook_name = event.hook_name
             layer_name = event.layer
-            
+
             # Allow all valid hooks and layers - don't filter too strictly
             # This ensures we capture all hooks: PRE_ROUTING, LOCAL_IN, FORWARD, LOCAL_OUT, POST_ROUTING
             if hook_name == "UNKNOWN" or not layer_name:
                 return
+
+            # NEW: Track pipeline stats for Inbound/Outbound
+            direction = self._detect_direction(hook_name, layer_name, event.function or '')
+            pipeline_layer = self._map_to_pipeline_layer(layer_name, event.function or '')
+            self.stats_by_direction_layer[direction][pipeline_layer] += 1
             
             # Accept event even if layer not in strict map - this helps capture more data
             # We'll validate layer presence in HOOK_LAYER_MAP but still process
@@ -323,22 +394,27 @@ class RealtimeStats:
         """Get current statistics summary - optimized for frontend graph"""
         with self._lock:
             uptime = time.time() - self.start_time
-            
+
             hooks_data = {}
             for hook_name in HOOK_ORDER:
                 if hook_name in self.hooks:
                     hooks_data[hook_name] = self.hooks[hook_name].to_dict()
-            
+
             for hook_name, hook_stats in self.hooks.items():
                 if hook_name not in HOOK_ORDER:
                     hooks_data[hook_name] = hook_stats.to_dict()
-            
+
             return {
                 'total_packets': self.total_packets,
                 'uptime_seconds': round(uptime, 2),
                 'packets_per_second': round(self.total_packets / max(uptime, 1), 2),
                 'hooks': hooks_data,
-                'recent_events': list(self.recent_events)[-100:]
+                'recent_events': list(self.recent_events)[-100:],
+                # NEW: Pipeline stats for Inbound/Outbound visualization
+                'stats': {
+                    'Inbound': dict(self.stats_by_direction_layer['Inbound']),
+                    'Outbound': dict(self.stats_by_direction_layer['Outbound'])
+                }
             }
     
     def reset(self):
@@ -349,6 +425,11 @@ class RealtimeStats:
             self.recent_events.clear()
             self.total_packets = 0
             self.start_time = time.time()
+            # NEW: Reset pipeline stats
+            self.stats_by_direction_layer = {
+                'Inbound': defaultdict(int),
+                'Outbound': defaultdict(int)
+            }
 
 # ============================================
 # HELPER FUNCTIONS
