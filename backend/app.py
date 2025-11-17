@@ -645,7 +645,52 @@ class PacketTrace:
         if ip == 0:
             return None
         return socket.inet_ntoa(ip.to_bytes(4, byteorder='little'))
-    
+
+    def is_valuable_trace(self) -> bool:
+        """
+        Determine if a trace is valuable enough to be logged/exported.
+
+        A trace is considered valuable if it meets ANY of these criteria:
+        1. Has complete packet info (protocol, IPs, ports)
+        2. Has multiple events (>= 2) showing actual packet processing
+        3. Has NFT rule evaluation (indicates firewall interaction)
+        4. Has verdict changes (indicates complex firewall logic)
+        5. Has duration >= 10 microseconds (indicates significant processing)
+
+        This filters out low-value traces like:
+        - Single-function traces with no packet metadata
+        - Incomplete traces from non-IPv4 packets
+        - Driver-level traces that don't show full processing
+        """
+        # Criterion 1: Has complete packet info
+        has_complete_info = (
+            self.protocol is not None and
+            self.src_ip is not None and
+            self.dst_ip is not None
+        )
+
+        # Criterion 2: Has multiple events (actual processing)
+        has_multiple_events = len(self.events) >= 2
+
+        # Criterion 3: Has NFT rule evaluation
+        has_nft_activity = self.total_rules_evaluated > 0
+
+        # Criterion 4: Has verdict changes (complex firewall logic)
+        has_verdict_changes = self.verdict_changes > 0
+
+        # Criterion 5: Long duration (>= 10 microseconds = 10000 nanoseconds)
+        # This catches packets with significant processing time
+        duration_ns = self.last_seen - self.first_seen
+        has_significant_duration = duration_ns >= 10000
+
+        return (
+            has_complete_info or
+            has_multiple_events or
+            has_nft_activity or
+            has_verdict_changes or
+            has_significant_duration
+        )
+
     def to_summary(self) -> Dict:
         """Export summary - SIMPLIFIED FORMAT for full mode"""
         sorted_events = sorted(self.events, key=lambda x: x['timestamp'])
@@ -1648,7 +1693,18 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"trace_{self.mode}_{self.session_id}_{timestamp}.json"
         output_path = os.path.join(OUTPUT_DIR, filename)
-        
+
+        # OPTIMIZATION: Filter out low-value traces before export
+        # This dramatically reduces log size by removing:
+        # - Single-function traces with no packet metadata
+        # - Incomplete traces from non-IPv4 packets
+        # - Driver-level traces that don't show full processing
+        valuable_traces = [trace for trace in self.completed_traces if trace.is_valuable_trace()]
+
+        # Calculate how many traces were filtered out
+        total_traces = len(self.completed_traces)
+        filtered_count = total_traces - len(valuable_traces)
+
         summary = {
             'session': {
                 'id': self.session_id, 'mode': self.mode,
@@ -1659,9 +1715,12 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
             },
             'statistics': {
                 'total_events': self.total_events,
-                'total_packets': len(self.completed_traces),
+                'total_packets': total_traces,
+                'valuable_packets': len(valuable_traces),
+                'filtered_packets': filtered_count,
+                'filter_reduction_pct': round((filtered_count / total_traces * 100), 2) if total_traces > 0 else 0,
             },
-            'traces': [trace.to_summary() for trace in self.completed_traces]
+            'traces': [trace.to_summary() for trace in valuable_traces]
         }
         
         if self.mode in ['universal', 'full', 'multifunction']:
@@ -1701,8 +1760,11 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
         
         with open(output_path, 'w') as f:
             json.dump(summary, f, indent=2)
-        
-        print(f"[✓] Exported {len(self.completed_traces)} traces to {output_path}")
+
+        # Print export summary with filtering stats
+        print(f"[✓] Exported {len(valuable_traces)} valuable traces to {output_path}")
+        if filtered_count > 0:
+            print(f"[i] Filtered out {filtered_count} low-value traces ({summary['statistics']['filter_reduction_pct']}% reduction)")
         return output_path
     
     def get_stats(self) -> Dict:
