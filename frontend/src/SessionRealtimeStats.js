@@ -598,8 +598,8 @@ function SessionRealtimeStats({ sessionId }) {
         </div>
       )}
 
-      {/* Hook Pipeline Graph */}
-      {stats.hooks && Object.keys(stats.hooks).length > 0 ? (
+      {/* Hook Pipeline Graph - Only show for non-full modes */}
+      {stats.mode !== 'full' && stats.hooks && Object.keys(stats.hooks).length > 0 ? (
         <div className="realtime-panel full-width">
           <h3>🔄 Packet Flow Pipeline</h3>
           {stats.mode === 'multifunction' && (
@@ -755,7 +755,7 @@ function SessionRealtimeStats({ sessionId }) {
             })}
           </div>
         </div>
-      ) : (
+      ) : stats.mode !== 'full' && (
         <div className="realtime-panel full-width">
           <div className="empty-events">
             <p>📊 Đang chờ dữ liệu packet flow...</p>
@@ -764,8 +764,8 @@ function SessionRealtimeStats({ sessionId }) {
         </div>
       )}
 
-      {/* Hook Distribution */}
-      {stats.hooks && Object.keys(stats.hooks).length > 0 && (
+      {/* Hook Distribution - Only show for non-full modes */}
+      {stats.mode !== 'full' && stats.hooks && Object.keys(stats.hooks).length > 0 && (
         <div className="realtime-panel">
           <h3>🪝 Hook Distribution</h3>
           <div className="hook-bars">
