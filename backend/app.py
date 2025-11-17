@@ -54,6 +54,18 @@ except ImportError as e:
     print("[!] Install: pip3 install flask-socketio python-socketio")
 
 # ============================================================================
+# MULTI-FUNCTION TRACER INTEGRATION
+# ============================================================================
+try:
+    from multi_function_integration import add_multi_function_routes, cleanup_multi_function
+    add_multi_function_routes(app, socketio)
+    MULTI_FUNCTION_AVAILABLE = True
+    print("[✓] Multi-function tracer module loaded")
+except ImportError as e:
+    MULTI_FUNCTION_AVAILABLE = False
+    print(f"[!] Multi-function tracer not available: {e}")
+
+# ============================================================================
 # CONFIGURATION
 # ============================================================================
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
