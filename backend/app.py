@@ -81,21 +81,99 @@ TRACE_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "data", "cache", "tr
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# CRITICAL_FUNCTIONS: LUÔN được trace trong FULL mode
-CRITICAL_FUNCTIONS = [
-    # Network device layer
-    'netif_receive_skb', '__netif_receive_skb_core', 'netif_receive_skb_internal',
-    # IP layer
-    'ip_rcv', 'ip_rcv_core', 'ip_rcv_finish', 
-    'ip_local_deliver', 'ip_local_deliver_finish',
-    'ip_forward', 'ip_forward_finish',
-    # Transport layer
-    'tcp_v4_rcv', 'tcp_v4_do_rcv', 'udp_rcv', 'udp_unicast_rcv_skb',
-    # Netfilter hooks
-    'nf_hook_slow', 'nf_conntrack_in',
-    # Output path
-    'ip_output', 'ip_finish_output', 'ip_local_out', '__ip_local_out',
+# FIXED_TRACE_FUNCTIONS: 40-50 representative functions across networking layers
+# Organized by layer and corresponding to netfilter hooks:
+#   - PREROUTING (hook 0): XDP, Driver RX, IP receive, early netfilter
+#   - INPUT (hook 1): Local delivery, transport layer receive
+#   - FORWARD (hook 2): IP forwarding path
+#   - OUTPUT (hook 3): Local generation, transport layer send
+#   - POSTROUTING (hook 4): Final output, driver TX
+FIXED_TRACE_FUNCTIONS = [
+    # === XDP Layer (2 functions) ===
+    'xdp_do_redirect',
+    'xdp_do_generic_redirect',
+
+    # === Driver/Device Layer - RX Path (6 functions - PREROUTING) ===
+    'napi_gro_receive',
+    'netif_receive_skb',
+    '__netif_receive_skb_core',
+    'netif_receive_skb_internal',
+    'eth_type_trans',
+    'netif_receive_skb_list_internal',
+
+    # === Driver/Device Layer - TX Path (4 functions - POSTROUTING) ===
+    'dev_queue_xmit',
+    '__dev_queue_xmit',
+    'dev_hard_start_xmit',
+    'sch_direct_xmit',
+
+    # === TC (Traffic Control) Layer (2 functions) ===
+    'dev_queue_xmit_nit',
+    'tcf_classify',
+
+    # === IP Layer - RX/PREROUTING Path (5 functions - hook 0->1) ===
+    'ip_rcv',
+    'ip_rcv_core',
+    'ip_rcv_finish',
+    'ip_local_deliver',
+    'ip_local_deliver_finish',
+
+    # === IP Layer - FORWARD Path (3 functions - hook 2) ===
+    'ip_forward',
+    'ip_forward_finish',
+    'ip_forward_options',
+
+    # === IP Layer - OUTPUT/POSTROUTING Path (5 functions - hook 3->4) ===
+    'ip_local_out',
+    '__ip_local_out',
+    'ip_output',
+    'ip_finish_output',
+    'ip_finish_output2',
+
+    # === Netfilter Core (4 functions - all hooks) ===
+    'nf_hook_slow',
+    'nf_hook_thresh',
+    'nf_reinject',
+    'nf_queue',
+
+    # === Connection Tracking (3 functions - PREROUTING/OUTPUT) ===
+    'nf_conntrack_in',
+    'nf_confirm',
+    'nf_conntrack_alloc',
+
+    # === NAT (4 functions - PREROUTING/POSTROUTING) ===
+    'nf_nat_ipv4_in',
+    'nf_nat_ipv4_out',
+    'nf_nat_ipv4_local_fn',
+    'nf_nat_ipv4_fn',
+
+    # === Routing (4 functions) ===
+    'ip_route_input_slow',
+    'ip_route_input_noref',
+    'ip_route_output_key_hash',
+    'fib_validate_source',
+
+    # === Transport Layer - TCP (6 functions) ===
+    'tcp_v4_rcv',              # INPUT hook
+    'tcp_v4_do_rcv',           # INPUT hook
+    'tcp_rcv_established',     # INPUT hook
+    'tcp_sendmsg',             # OUTPUT hook
+    'tcp_write_xmit',          # OUTPUT hook
+    'tcp_transmit_skb',        # OUTPUT/POSTROUTING
+
+    # === Transport Layer - UDP (4 functions) ===
+    'udp_rcv',                 # INPUT hook
+    'udp_unicast_rcv_skb',     # INPUT hook
+    'udp_sendmsg',             # OUTPUT hook
+    'udp_send_skb',            # OUTPUT/POSTROUTING
+
+    # === Additional Core Functions (2 functions) ===
+    'ip_sabotage_in',
+    'ip_sabotage_out',
 ]
+
+# Legacy name for backward compatibility
+CRITICAL_FUNCTIONS = FIXED_TRACE_FUNCTIONS
 
 # BLACKLIST_FUNCTIONS: Không trace (internal/utility)
 BLACKLIST_PATTERNS = [
@@ -618,32 +696,15 @@ class TraceSession:
     
     def _start_full_mode(self) -> bool:
         print("[*] Starting FULL mode (Integrated: Functions + NFT verdicts)...")
-        
-        functions_to_trace = []
-        critical_filtered = [f for f in CRITICAL_FUNCTIONS if not is_blacklisted(f)]
-        print(f"[*] Priority: {len(critical_filtered)} critical path functions")
-        functions_to_trace.extend(critical_filtered)
-        
-        remaining_slots = self.max_functions - len(critical_filtered)
-        if remaining_slots > 0 and os.path.exists(FUNCTIONS_CACHE):
-            print(f"[*] Adding {remaining_slots} additional discovered functions...")
-            with open(FUNCTIONS_CACHE, 'r') as f:
-                data = json.load(f)
-                all_funcs = data.get('functions', [])
-                sorted_funcs = sorted(all_funcs, key=lambda x: (x['priority'], x['name']))
-                
-                for func in sorted_funcs:
-                    func_name = func['name']
-                    if func_name in functions_to_trace:
-                        continue
-                    if is_blacklisted(func_name):
-                        continue
-                    functions_to_trace.append(func_name)
-                    if len(functions_to_trace) >= self.max_functions:
-                        break
-        
+        print("[*] Using FIXED set of representative functions across all layers...")
+
+        # Use ONLY the fixed set of representative functions (40-50 functions)
+        # No dynamic discovery - this ensures consistent tracing across layers
+        functions_to_trace = [f for f in FIXED_TRACE_FUNCTIONS if not is_blacklisted(f)]
+
         self.functions = functions_to_trace
-        print(f"[*] Total functions to trace: {len(self.functions)}")
+        print(f"[*] Fixed function set: {len(self.functions)} functions")
+        print(f"[*] Coverage: XDP, Driver, TC, IP (RX/FWD/TX), Netfilter, Routing, TCP, UDP, NAT, CT")
         
         with open(FULL_TRACER_PATH, 'r') as f:
             bpf_code = f.read()
@@ -661,21 +722,65 @@ class TraceSession:
             print(f"[!] Warning: NFT hooks failed - {e}")
         
         print("[*] Attaching packet path functions...")
-        attached_critical = 0
-        attached_additional = 0
-        
+
+        # Track attachment by layer for better visibility
+        layer_stats = {
+            'XDP': 0, 'Driver RX': 0, 'Driver TX': 0, 'TC': 0,
+            'IP RX': 0, 'IP Forward': 0, 'IP TX': 0,
+            'Netfilter': 0, 'ConnTrack': 0, 'NAT': 0, 'Routing': 0,
+            'TCP': 0, 'UDP': 0, 'Other': 0
+        }
+
+        def categorize_function(fname):
+            if 'xdp' in fname:
+                return 'XDP'
+            elif fname in ['napi_gro_receive', 'netif_receive_skb', '__netif_receive_skb_core',
+                          'netif_receive_skb_internal', 'eth_type_trans', 'netif_receive_skb_list_internal']:
+                return 'Driver RX'
+            elif fname in ['dev_queue_xmit', '__dev_queue_xmit', 'dev_hard_start_xmit', 'sch_direct_xmit']:
+                return 'Driver TX'
+            elif 'tc' in fname or fname == 'dev_queue_xmit_nit':
+                return 'TC'
+            elif fname in ['ip_rcv', 'ip_rcv_core', 'ip_rcv_finish', 'ip_local_deliver', 'ip_local_deliver_finish']:
+                return 'IP RX'
+            elif 'forward' in fname:
+                return 'IP Forward'
+            elif fname in ['ip_local_out', '__ip_local_out', 'ip_output', 'ip_finish_output', 'ip_finish_output2']:
+                return 'IP TX'
+            elif 'nf_hook' in fname or 'nf_queue' in fname or 'nf_reinject' in fname:
+                return 'Netfilter'
+            elif 'conntrack' in fname or 'nf_confirm' in fname:
+                return 'ConnTrack'
+            elif 'nat' in fname:
+                return 'NAT'
+            elif 'route' in fname or 'fib_' in fname:
+                return 'Routing'
+            elif 'tcp_' in fname:
+                return 'TCP'
+            elif 'udp_' in fname:
+                return 'UDP'
+            else:
+                return 'Other'
+
+        attached_total = 0
+        failed_total = 0
+
         for func_name in self.functions:
             try:
                 self.bpf_full.attach_kprobe(event=func_name, fn_name="trace_skb_func")
-                if func_name in critical_filtered:
-                    attached_critical += 1
-                else:
-                    attached_additional += 1
+                layer = categorize_function(func_name)
+                layer_stats[layer] += 1
+                attached_total += 1
             except:
-                pass
-        
-        print(f"[✓] Attached {attached_critical}/{len(critical_filtered)} critical functions")
-        print(f"[✓] Attached {attached_additional} additional functions")
+                failed_total += 1
+
+        print(f"[✓] Successfully attached {attached_total}/{len(self.functions)} functions")
+        if failed_total > 0:
+            print(f"[!] Failed to attach {failed_total} functions (may not exist in this kernel)")
+        print("[*] Attachment by layer:")
+        for layer, count in layer_stats.items():
+            if count > 0:
+                print(f"    • {layer:12s}: {count:2d} functions")
         
         self.bpf_full["events"].open_perf_buffer(self._handle_full_event)
         
@@ -1394,6 +1499,98 @@ def get_functions():
     with open(FUNCTIONS_CACHE, 'r') as f:
         return jsonify(json.load(f))
 
+@app.route('/api/functions/fixed', methods=['GET'])
+def get_fixed_functions():
+    """Get the fixed function set used in full trace mode, organized by layer and hook"""
+
+    # Organize functions by layer and hook
+    function_map = {
+        'XDP Layer': {
+            'functions': ['xdp_do_redirect', 'xdp_do_generic_redirect'],
+            'hooks': ['PREROUTING'],
+            'description': 'eXpress Data Path - Fast packet processing'
+        },
+        'Driver RX (Receive)': {
+            'functions': ['napi_gro_receive', 'netif_receive_skb', '__netif_receive_skb_core',
+                         'netif_receive_skb_internal', 'eth_type_trans', 'netif_receive_skb_list_internal'],
+            'hooks': ['PREROUTING'],
+            'description': 'Network device driver receive path'
+        },
+        'Driver TX (Transmit)': {
+            'functions': ['dev_queue_xmit', '__dev_queue_xmit', 'dev_hard_start_xmit', 'sch_direct_xmit'],
+            'hooks': ['POSTROUTING'],
+            'description': 'Network device driver transmit path'
+        },
+        'TC (Traffic Control)': {
+            'functions': ['dev_queue_xmit_nit', 'tcf_classify'],
+            'hooks': ['PREROUTING', 'POSTROUTING'],
+            'description': 'Traffic control and QoS'
+        },
+        'IP Layer - Receive': {
+            'functions': ['ip_rcv', 'ip_rcv_core', 'ip_rcv_finish', 'ip_local_deliver', 'ip_local_deliver_finish'],
+            'hooks': ['PREROUTING', 'INPUT'],
+            'description': 'IP receive and local delivery'
+        },
+        'IP Layer - Forward': {
+            'functions': ['ip_forward', 'ip_forward_finish', 'ip_forward_options'],
+            'hooks': ['FORWARD'],
+            'description': 'IP packet forwarding'
+        },
+        'IP Layer - Output': {
+            'functions': ['ip_local_out', '__ip_local_out', 'ip_output', 'ip_finish_output', 'ip_finish_output2'],
+            'hooks': ['OUTPUT', 'POSTROUTING'],
+            'description': 'IP output and transmission'
+        },
+        'Netfilter Core': {
+            'functions': ['nf_hook_slow', 'nf_hook_thresh', 'nf_reinject', 'nf_queue'],
+            'hooks': ['ALL'],
+            'description': 'Core netfilter hook processing'
+        },
+        'Connection Tracking': {
+            'functions': ['nf_conntrack_in', 'nf_confirm', 'nf_conntrack_alloc'],
+            'hooks': ['PREROUTING', 'OUTPUT'],
+            'description': 'Connection tracking subsystem'
+        },
+        'NAT (Network Address Translation)': {
+            'functions': ['nf_nat_ipv4_in', 'nf_nat_ipv4_out', 'nf_nat_ipv4_local_fn', 'nf_nat_ipv4_fn'],
+            'hooks': ['PREROUTING', 'POSTROUTING', 'OUTPUT'],
+            'description': 'Network address translation'
+        },
+        'Routing': {
+            'functions': ['ip_route_input_slow', 'ip_route_input_noref', 'ip_route_output_key_hash', 'fib_validate_source'],
+            'hooks': ['PREROUTING', 'OUTPUT'],
+            'description': 'IP routing decision'
+        },
+        'TCP Transport': {
+            'functions': ['tcp_v4_rcv', 'tcp_v4_do_rcv', 'tcp_rcv_established', 'tcp_sendmsg', 'tcp_write_xmit', 'tcp_transmit_skb'],
+            'hooks': ['INPUT', 'OUTPUT'],
+            'description': 'TCP protocol processing'
+        },
+        'UDP Transport': {
+            'functions': ['udp_rcv', 'udp_unicast_rcv_skb', 'udp_sendmsg', 'udp_send_skb'],
+            'hooks': ['INPUT', 'OUTPUT'],
+            'description': 'UDP protocol processing'
+        },
+        'Additional': {
+            'functions': ['ip_sabotage_in', 'ip_sabotage_out'],
+            'hooks': ['INPUT', 'OUTPUT'],
+            'description': 'Additional kernel hooks'
+        }
+    }
+
+    return jsonify({
+        'total_functions': len(FIXED_TRACE_FUNCTIONS),
+        'function_map': function_map,
+        'functions_list': FIXED_TRACE_FUNCTIONS,
+        'hook_mapping': {
+            'PREROUTING': 0,
+            'INPUT': 1,
+            'FORWARD': 2,
+            'OUTPUT': 3,
+            'POSTROUTING': 4
+        }
+    })
+
 @app.route('/api/sessions', methods=['GET'])
 def list_sessions():
     return jsonify({'sessions': session_manager.list_sessions()})
@@ -1459,7 +1656,8 @@ def get_modes():
             {'id': 'universal', 'name': 'Universal Tracer',
              'description': 'Trace đường đi packet qua kernel functions'},
             {'id': 'full', 'name': 'Full Tracer (Recommended)',
-             'description': 'Trace ĐẦY ĐỦ: đường đi + verdict cuối cùng',
+             'description': 'Trace ĐẦY ĐỦ: 50 functions cố định ở tất cả layers (XDP, TC, Netfilter, Routing, Driver, ...) + NFT verdicts',
+             'function_count': len(FIXED_TRACE_FUNCTIONS),
              'recommended': True},
             {'id': 'multifunction', 'name': 'Multi-Function Tracer',
              'description': 'Trace nhiều functions với layer & hook statistics'}
@@ -1896,9 +2094,11 @@ if __name__ == '__main__':
     print(f"Hostname: {socket.gethostname()}")
     print("=" * 70)
     print("MODES:")
-    print("  • nft      - NFT rules only")
+    print("  • nft       - NFT rules only")
     print("  • universal - Kernel functions only")
-    print("  • full     - ĐƯỜNG ĐI + VERDICT (recommended!)")
+    print("  • full      - 50 FIXED FUNCTIONS across all layers + NFT verdicts (recommended!)")
+    print("              Covers: XDP, Driver, TC, IP (RX/FWD/TX), Netfilter, Routing, TCP, UDP, NAT, CT")
+    print("  • multifunction - Custom function set with statistics")
     print("=" * 70)
     
     if REALTIME_AVAILABLE:
