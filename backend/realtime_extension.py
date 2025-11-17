@@ -169,7 +169,7 @@ FUNCTION_TO_LAYER = {
     'udp_unicast_rcv_skb': 'TCP/UDP',
 
     # Socket
-    'sock_def_readable': 'Socket',
+    # 'sock_def_readable': 'Socket',  # REMOVED: Generates too many low-value events
     'sk_filter_trim_cap': 'Socket',
 
     # Forward
@@ -950,7 +950,7 @@ class RealtimeTracer:
                 'udp_unicast_rcv_skb',
 
                 # Socket
-                'sock_def_readable',
+                # 'sock_def_readable',  # REMOVED: Generates too many low-value events
                 'sk_filter_trim_cap',
 
                 # Forward

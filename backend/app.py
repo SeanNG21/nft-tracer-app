@@ -151,7 +151,7 @@ FUNCTION_TO_LAYER = {
     'udp_unicast_rcv_skb': 'TCP/UDP',
 
     # Socket
-    'sock_def_readable': 'Socket',
+    # 'sock_def_readable': 'Socket',  # REMOVED: Generates too many low-value events
     'sk_filter_trim_cap': 'Socket',
 
     # Forward
@@ -713,14 +713,16 @@ class PacketTrace:
         """Export summary - SIMPLIFIED FORMAT for full mode"""
         sorted_events = sorted(self.events, key=lambda x: x['timestamp'])
 
-        # For FULL mode: Use simplified format with only function calls
+        # For FULL mode: Use simplified format with function calls and nft_events
         if self.mode == 'full':
-            # Extract only function_call events and simplify them
+            # Extract function_call events and NFT events separately
             simplified_events = []
+            nft_events = []
             total_function_calls = 0
 
             for event in sorted_events:
-                if event.get('trace_type') == 'function_call':
+                trace_type = event.get('trace_type')
+                if trace_type == 'function_call':
                     total_function_calls += 1
                     # Simplified event structure - only essential fields
                     simplified_events.append({
@@ -730,6 +732,9 @@ class PacketTrace:
                         'cpu_id': event['cpu_id'],
                         'comm': event['comm']
                     })
+                elif trace_type in ['chain_exit', 'rule_eval', 'hook_exit']:
+                    # FIX: Export nft_events in full mode
+                    nft_events.append(event)
 
             # Determine branch based on direction and final stage
             branch = "UNKNOWN"
@@ -745,7 +750,7 @@ class PacketTrace:
             elif self.direction == "Outbound":
                 branch = "OUTPUT"
 
-            # Return simplified format
+            # Return simplified format with nft_events
             return {
                 'skb_addr': hex(self.skb_addr) if self.skb_addr > 0 else f"synthetic_{self.skb_addr}",
                 'protocol': self.protocol,
@@ -765,7 +770,9 @@ class PacketTrace:
                 'total_rules_evaluated': self.total_rules_evaluated,
                 'verdict_changes': self.verdict_changes,
                 'events': simplified_events,
-                'all_events_count': len(simplified_events)
+                'nft_events': nft_events,  # FIX: Include NFT events
+                'all_events_count': len(simplified_events),
+                'nft_events_count': len(nft_events)  # FIX: Include NFT event count
             }
 
         # For other modes (NFT, Universal, Multifunction): Keep full format
@@ -836,6 +843,10 @@ class PacketTrace:
             # All events (for detailed analysis)
             'all_events': sorted_events,
             'all_events_count': len(sorted_events),
+
+            # FIX: Include separated NFT events for analysis
+            'nft_events': nft_events,
+            'nft_events_count': len(nft_events),
         }
     
     @staticmethod
