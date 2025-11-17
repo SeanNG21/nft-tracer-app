@@ -15,7 +15,7 @@ function App() {
   const [functions, setFunctions] = useState(null);
   const [newSession, setNewSession] = useState({
     id: '',
-    mode: 'full',
+    mode: 'multi_function',  // Default to new recommended mode
     filter: '',
     maxFunctions: 30
   });
@@ -274,7 +274,7 @@ function App() {
             <section className="card">
               <h2>🚀 Tạo Trace Session Mới</h2>
               <p className="card-description">
-                Chọn mode tracing và cấu hình tham số. Full Mode (recommended) trace đầy đủ packet path + NFT verdicts.
+                Chọn mode tracing và cấu hình tham số. Multi-Function Mode V2 (recommended) có improved packet parsing, non-IP support, và realtime stats.
               </p>
               
               <div className="form">
