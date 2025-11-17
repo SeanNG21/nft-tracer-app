@@ -277,9 +277,14 @@ function SessionRealtimeStats({ sessionId }) {
       )}
 
       {/* Hook Pipeline Graph */}
-      {stats.hooks && Object.keys(stats.hooks).length > 0 && stats.mode !== 'multifunction' ? (
+      {stats.hooks && Object.keys(stats.hooks).length > 0 ? (
         <div className="realtime-panel full-width">
           <h3>🔄 Packet Flow Pipeline</h3>
+          {stats.mode === 'multifunction' && (
+            <div className="multifunction-note">
+              ℹ️ Multi-Function Mode: Layers are auto-detected from traced kernel functions
+            </div>
+          )}
           <div className="hook-pipeline">
             {HOOK_ORDER.map((hookName, index) => {
               const hookData = stats.hooks[hookName];

@@ -923,7 +923,9 @@ class SessionStatsTracker:
 
             # Determine layer
             if is_multifunction and 'layer' in event:
-                layer_name = event['layer']  # Use layer from BPF metadata
+                layer_name_raw = event['layer']  # Layer from BPF metadata
+                # Map BPF layer names to frontend layer names
+                layer_name = self._map_multifunction_layer(layer_name_raw, hook_name)
             else:
                 layer_name = self._determine_layer(func_name, hook_name)
 
@@ -978,11 +980,52 @@ class SessionStatsTracker:
             # Update total packets (count unique packets, not events)
             self.total_packets = max(self.total_packets, sum(h['packets_total'] for h in self.hooks.values()) // max(len(self.hooks), 1))
     
+    def _map_multifunction_layer(self, bpf_layer: str, hook_name: str) -> str:
+        """Map BPF layer names to frontend layer names"""
+        # Mapping from BPF trace_config.json layers to frontend LAYER_MAP
+        layer_mapping = {
+            'Device': 'Ingress',
+            'GRO': 'Ingress',
+            'L2': 'L2',
+            'Bridge': 'L2',
+            'IPv4': 'IP',
+            'IPv6': 'IP',
+            'IP': 'IP',
+            'Routing': 'IP',
+            'Netfilter': 'Firewall',
+            'NFT': 'Firewall',
+            'Conntrack': 'Firewall',
+            'TCP': 'Socket',
+            'UDP': 'Socket',
+            'ICMP': 'Socket',
+            'Socket': 'Socket',
+            'Xmit': 'Egress',
+            'Qdisc': 'Egress',
+            'SoftIRQ': 'Ingress'
+        }
+
+        frontend_layer = layer_mapping.get(bpf_layer, bpf_layer)
+
+        # Verify layer is valid for this hook
+        valid_layers = HOOK_LAYER_MAP.get(hook_name, [])
+        if frontend_layer in valid_layers:
+            return frontend_layer
+
+        # If not valid, try to find best match
+        if valid_layers:
+            # Prefer Firewall for hooks that support it
+            if 'Firewall' in valid_layers and bpf_layer in ['Netfilter', 'NFT']:
+                return 'Firewall'
+            # Otherwise return first valid layer
+            return valid_layers[0]
+
+        return frontend_layer
+
     def _determine_layer(self, func_name: str, hook_name: str) -> str:
         """Determine which layer a function belongs to"""
         if not func_name:
             return "Unknown"
-        
+
         # Check each layer's functions
         for layer, functions in LAYER_MAP.items():
             for func in functions:
@@ -991,7 +1034,7 @@ class SessionStatsTracker:
                     valid_layers = HOOK_LAYER_MAP.get(hook_name, [])
                     if layer in valid_layers:
                         return layer
-        
+
         # Default to first valid layer for hook
         valid_layers = HOOK_LAYER_MAP.get(hook_name, [])
         return valid_layers[0] if valid_layers else "Unknown"
