@@ -112,6 +112,182 @@ PROTO_MAP = {
     132: "SCTP"
 }
 
+# Function → Pipeline Layer mapping (aligned with full trace mode)
+FUNCTION_TO_LAYER = {
+    # === INBOUND PIPELINE ===
+    # NIC Layer
+    'napi_gro_receive': 'NIC',
+    'netif_receive_skb': 'NIC',
+    'netif_receive_skb_list_internal': 'NIC',
+
+    # Driver (NAPI)
+    'napi_poll': 'Driver (NAPI)',
+    'net_rx_action': 'Driver (NAPI)',
+    'process_backlog': 'Driver (NAPI)',
+
+    # GRO
+    'gro_normal_list': 'GRO',
+    'dev_gro_receive': 'GRO',
+    'skb_gro_receive': 'GRO',
+
+    # TC Ingress
+    'tcf_classify': 'TC Ingress',
+    'ingress_redirect': 'TC Ingress',
+    'dev_queue_xmit_nit': 'TC Ingress',
+
+    # Netfilter (will be refined by hook value)
+    'nf_hook_slow': 'Netfilter',
+    'nf_hook_thresh': 'Netfilter',
+    'nf_reinject': 'Netfilter',
+
+    # Conntrack
+    'nf_conntrack_in': 'Conntrack',
+    'nf_ct_invert_tuple': 'Conntrack',
+    'nf_confirm': 'Conntrack',
+
+    # NAT
+    'nf_nat_ipv4_pre_routing': 'NAT PREROUTING',
+    'nf_nat_ipv4_fn': 'NAT',
+
+    # Routing Decision
+    'ip_route_input_slow': 'Routing Decision',
+    'fib_validate_source': 'Routing Decision',
+    'ip_route_output_key_hash': 'Routing',
+
+    # Local Delivery
+    'ip_local_deliver': 'Local Delivery',
+    'ip_local_deliver_finish': 'Local Delivery',
+
+    # Netfilter INPUT
+    'nf_queue': 'Netfilter',
+
+    # TCP/UDP (Inbound)
+    'tcp_v4_rcv': 'TCP/UDP',
+    'tcp_v4_do_rcv': 'TCP/UDP',
+    'tcp_rcv_established': 'TCP/UDP',
+    'udp_rcv': 'TCP/UDP',
+    'udp_unicast_rcv_skb': 'TCP/UDP',
+
+    # Socket
+    'sock_def_readable': 'Socket',
+    'sk_filter_trim_cap': 'Socket',
+
+    # Forward
+    'ip_forward': 'Forward',
+    'ip_forward_finish': 'Forward',
+
+    # === OUTBOUND PIPELINE ===
+    # Application
+    'tcp_sendmsg': 'Application',
+    'udp_sendmsg': 'Application',
+
+    # TCP/UDP Output
+    'tcp_write_xmit': 'TCP/UDP Output',
+    'tcp_transmit_skb': 'TCP/UDP Output',
+    'udp_send_skb': 'TCP/UDP Output',
+
+    # Routing Lookup (outbound)
+    'ip_route_output_flow': 'Routing Lookup',
+
+    # NAT (outbound)
+    'nf_nat_ipv4_out': 'NAT',
+    'nf_nat_ipv4_local_fn': 'NAT',
+
+    # TC Egress
+    'sch_direct_xmit': 'TC Egress',
+
+    # Driver TX / NIC TX
+    'dev_queue_xmit': 'Driver TX',
+    '__dev_queue_xmit': 'Driver TX',
+    'dev_hard_start_xmit': 'Driver TX',
+}
+
+def refine_layer_by_hook(func_name: str, base_layer: str, hook: int) -> str:
+    """
+    Refine generic layer name based on netfilter hook value.
+    Hook values: 0=PREROUTING, 1=INPUT, 2=FORWARD, 3=OUTPUT, 4=POSTROUTING
+    """
+    # nf_hook_slow and similar functions need to be refined by hook
+    if base_layer == 'Netfilter' or 'nf_hook' in func_name or 'nf_queue' in func_name:
+        hook_map = {
+            0: 'Netfilter PREROUTING',
+            1: 'Netfilter INPUT',
+            2: 'Netfilter FORWARD',
+            3: 'Netfilter OUTPUT',
+            4: 'Netfilter POSTROUTING',
+        }
+        return hook_map.get(hook, base_layer)
+
+    # NAT functions need hook context
+    if 'NAT' in base_layer or 'nf_nat' in func_name:
+        if hook == 0:
+            return 'NAT PREROUTING'
+        elif hook in [3, 4]:
+            return 'NAT'  # POSTROUTING or OUTPUT - both are NAT stage
+        return 'NAT'
+
+    # Routing functions
+    if 'Routing' in base_layer:
+        if 'input' in func_name:
+            return 'Routing Decision'
+        elif 'output' in func_name:
+            return 'Routing Lookup'
+        return base_layer
+
+    return base_layer
+
+def detect_packet_direction_new(func_name: str, layer: str, hook: int) -> str:
+    """
+    Detect packet direction (Inbound or Outbound) based on function name, layer, and hook.
+
+    Hook-based detection (most reliable):
+    - PRE_ROUTING (0), LOCAL_IN (1), FORWARD (2) → Inbound
+    - LOCAL_OUT (3), POST_ROUTING (4) → Outbound
+    """
+    # Hook-based detection (most reliable)
+    if hook in [0, 1, 2]:  # PREROUTING, INPUT, FORWARD
+        return 'Inbound'
+    elif hook in [3, 4]:  # OUTPUT, POSTROUTING
+        return 'Outbound'
+
+    # Layer-based detection
+    inbound_layers = [
+        'NIC', 'Driver (NAPI)', 'GRO', 'TC Ingress',
+        'Netfilter PREROUTING', 'Netfilter INPUT', 'Netfilter FORWARD',
+        'Conntrack', 'NAT PREROUTING', 'Routing Decision',
+        'Local Delivery', 'Socket'
+    ]
+    outbound_layers = [
+        'Application', 'TCP/UDP Output', 'Netfilter OUTPUT',
+        'Routing Lookup', 'NAT', 'TC Egress', 'Driver TX', 'NIC'
+    ]
+
+    if layer in inbound_layers:
+        return 'Inbound'
+    if layer in outbound_layers:
+        return 'Outbound'
+
+    # Function name heuristics
+    func_lower = func_name.lower()
+    inbound_keywords = ['rcv', 'receive', 'input', 'ingress', 'deliver']
+    outbound_keywords = ['sendmsg', 'xmit', 'transmit', 'output', 'egress']
+
+    for keyword in inbound_keywords:
+        if keyword in func_lower:
+            return 'Inbound'
+    for keyword in outbound_keywords:
+        if keyword in func_lower:
+            return 'Outbound'
+
+    # TCP/UDP and Forward are special
+    if layer in ['TCP/UDP', 'Forward']:
+        if 'sendmsg' in func_lower:
+            return 'Outbound'
+        return 'Inbound'
+
+    # Default to Inbound
+    return 'Inbound'
+
 # ============================================
 # DATA STRUCTURES
 # ============================================
@@ -255,24 +431,30 @@ class RealtimeStats:
             self.hooks[hook_name] = HookStats()
         return self.hooks[hook_name]
     
-    def _detect_direction(self, hook_name: str, layer_name: str, function: str) -> str:
-        """Detect packet direction (Inbound or Outbound)"""
-        # Hook-based detection
+    def _detect_direction(self, hook_name: str, layer_name: str, function: str, hook: int) -> str:
+        """Detect packet direction (Inbound or Outbound) using new pipeline mapping"""
+        # First try to use function-based detection
+        if function and function in FUNCTION_TO_LAYER:
+            base_layer = FUNCTION_TO_LAYER[function]
+            refined_layer = refine_layer_by_hook(function, base_layer, hook)
+            return detect_packet_direction_new(function, refined_layer, hook)
+
+        # Fallback to hook-based detection
         if hook_name in ['PRE_ROUTING', 'LOCAL_IN', 'FORWARD']:
             return 'Inbound'
         elif hook_name in ['LOCAL_OUT', 'POST_ROUTING']:
             return 'Outbound'
 
-        # Layer-based detection
+        # Layer-based fallback (old layer names)
         if layer_name in ['Ingress', 'L2']:
             return 'Inbound'
         elif layer_name == 'Egress':
             return 'Outbound'
 
-        # Function-based detection
+        # Function-based fallback
         if function:
             func_lower = function.lower()
-            if any(kw in func_lower for kw in ['rcv', 'receive', 'input', 'ingress']):
+            if any(kw in func_lower for kw in ['rcv', 'receive', 'input', 'ingress', 'deliver']):
                 return 'Inbound'
             elif any(kw in func_lower for kw in ['sendmsg', 'xmit', 'transmit', 'output', 'egress']):
                 return 'Outbound'
@@ -280,9 +462,16 @@ class RealtimeStats:
         # Default to Inbound
         return 'Inbound'
 
-    def _map_to_pipeline_layer(self, layer_name: str, function: str) -> str:
-        """Map old layer name to new pipeline layer name"""
-        # Direct mappings
+    def _map_to_pipeline_layer(self, layer_name: str, function: str, hook: int) -> str:
+        """Map function to new pipeline layer name using FUNCTION_TO_LAYER"""
+        # First priority: Use FUNCTION_TO_LAYER mapping
+        if function and function in FUNCTION_TO_LAYER:
+            base_layer = FUNCTION_TO_LAYER[function]
+            # Refine by hook if needed (e.g., Netfilter → Netfilter PREROUTING)
+            refined_layer = refine_layer_by_hook(function, base_layer, hook)
+            return refined_layer
+
+        # Fallback: Old layer name mappings
         layer_map = {
             'Ingress': 'NIC',
             'L2': 'Driver (NAPI)',
@@ -295,7 +484,7 @@ class RealtimeStats:
         if layer_name in layer_map:
             return layer_map[layer_name]
 
-        # Function-based detection
+        # Fallback: Function-based heuristics
         if function:
             func_lower = function.lower()
             if 'napi' in func_lower:
@@ -307,11 +496,25 @@ class RealtimeStats:
             elif 'conntrack' in func_lower:
                 return 'Conntrack'
             elif 'nat' in func_lower:
+                if hook == 0:
+                    return 'NAT PREROUTING'
                 return 'NAT'
             elif 'route' in func_lower:
+                if 'input' in func_lower:
+                    return 'Routing Decision'
+                elif 'output' in func_lower:
+                    return 'Routing Lookup'
                 return 'Routing'
+            elif 'local_deliver' in func_lower:
+                return 'Local Delivery'
+            elif 'forward' in func_lower:
+                return 'Forward'
             elif 'tcp' in func_lower or 'udp' in func_lower:
+                if 'sendmsg' in func_lower or 'write' in func_lower or 'xmit' in func_lower:
+                    return 'TCP/UDP Output'
                 return 'TCP/UDP'
+            elif 'sendmsg' in func_lower:
+                return 'Application'
 
         return layer_name
 
@@ -326,9 +529,10 @@ class RealtimeStats:
             if hook_name == "UNKNOWN" or not layer_name:
                 return
 
-            # NEW: Track pipeline stats for Inbound/Outbound
-            direction = self._detect_direction(hook_name, layer_name, event.function or '')
-            pipeline_layer = self._map_to_pipeline_layer(layer_name, event.function or '')
+            # NEW: Track pipeline stats for Inbound/Outbound using new mapping
+            hook = event.hook if event.hook != 255 else 0  # Default to PREROUTING if unknown
+            direction = self._detect_direction(hook_name, layer_name, event.function or '', hook)
+            pipeline_layer = self._map_to_pipeline_layer(layer_name, event.function or '', hook)
             self.stats_by_direction_layer[direction][pipeline_layer] += 1
             
             # Accept event even if layer not in strict map - this helps capture more data
@@ -526,56 +730,94 @@ class RealtimeTracer:
             print("[*] Compiling BPF program...")
             self.bpf = BPF(text=bpf_code)
             
+            # FIXED: 54 critical networking functions aligned with full trace mode
             functions_to_trace = [
-                # === Ingress Layer ===
-                '__netif_receive_skb_core',
+                # === INBOUND PIPELINE ===
+                # NIC Layer
+                'napi_gro_receive',
                 'netif_receive_skb',
-                'netif_receive_skb_internal',
-                'netif_rx',
-                'netif_rx_internal',
-                
-                # === IP Layer ===
-                'ip_rcv',
-                'ip_rcv_finish',
-                'ip_rcv_core',
-                'ip_output',
-                'ip_finish_output',
-                'ip_finish_output2',
-                'ip_local_out',
-                '__ip_local_out',
-                'ip_forward',
-                'ip_forward_finish',
+                'netif_receive_skb_list_internal',
+
+                # Driver (NAPI)
+                'napi_poll',
+                'net_rx_action',
+                'process_backlog',
+
+                # GRO
+                'gro_normal_list',
+                'dev_gro_receive',
+                'skb_gro_receive',
+
+                # TC Ingress
+                'tcf_classify',
+                'ingress_redirect',
+                'dev_queue_xmit_nit',
+
+                # Netfilter (refined by hook)
+                'nf_hook_slow',
+                'nf_hook_thresh',
+                'nf_reinject',
+
+                # Conntrack
+                'nf_conntrack_in',
+                'nf_ct_invert_tuple',
+                'nf_confirm',
+
+                # NAT
+                'nf_nat_ipv4_pre_routing',
+                'nf_nat_ipv4_fn',
+
+                # Routing Decision
+                'ip_route_input_slow',
+                'fib_validate_source',
+                'ip_route_output_key_hash',
+
+                # Local Delivery
                 'ip_local_deliver',
                 'ip_local_deliver_finish',
-                
-                # === Netfilter/Firewall Layer (CRITICAL!) ===
-                'nf_hook_slow',  # Main netfilter hook - catches all hooks!
-                'nft_do_chain',
-                'nft_immediate_eval',
-                'nf_conntrack_in',
-                'nf_nat_inet_fn',
-                'nf_nat_ipv4_fn',
-                
-                # === Transport/Socket Layer ===
+
+                # NFT/Queue
+                'nf_queue',
+
+                # TCP/UDP (Inbound)
                 'tcp_v4_rcv',
                 'tcp_v4_do_rcv',
-                'tcp_transmit_skb',
-                'tcp_write_xmit',
-                'tcp_send_mss',
-                '__tcp_transmit_skb',
+                'tcp_rcv_established',
                 'udp_rcv',
-                '__udp4_lib_rcv',
-                'udp_sendmsg',
-                'udp_send_skb',
-                '__sk_receive_skb',
+                'udp_unicast_rcv_skb',
+
+                # Socket
+                'sock_def_readable',
                 'sk_filter_trim_cap',
-                
-                # === Egress Layer ===
+
+                # Forward
+                'ip_forward',
+                'ip_forward_finish',
+
+                # === OUTBOUND PIPELINE ===
+                # Application
+                'tcp_sendmsg',
+                'udp_sendmsg',
+
+                # TCP/UDP Output
+                'tcp_write_xmit',
+                'tcp_transmit_skb',
+                'udp_send_skb',
+
+                # Routing Lookup (outbound)
+                'ip_route_output_flow',
+
+                # NAT (outbound)
+                'nf_nat_ipv4_out',
+                'nf_nat_ipv4_local_fn',
+
+                # TC Egress
+                'sch_direct_xmit',
+
+                # Driver TX / NIC TX
                 'dev_queue_xmit',
                 '__dev_queue_xmit',
                 'dev_hard_start_xmit',
-                'sch_direct_xmit',
-                '__dev_xmit_skb',
             ]
             
             attached_count = 0
