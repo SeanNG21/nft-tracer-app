@@ -282,37 +282,120 @@ function RealtimeView() {
                       </span>
                     </div>
 
-                    <div className="pipeline-stages">
-                      {PIPELINE_DEFINITIONS.Inbound.map((stageDef, index) => {
-                        const count = stats.stats.Inbound[stageDef.name] || 0;
-                        const maxCount = Math.max(...Object.values(stats.stats.Inbound));
-                        const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
-                        const isActive = count > 0;
-                        const isBranch = stageDef.branch !== undefined;
+                    {/* Main Pipeline Flow */}
+                    <div className="pipeline-main-flow">
+                      <div className="pipeline-stages">
+                        {PIPELINE_DEFINITIONS.Inbound
+                          .filter(s => !s.branch) // Only main flow
+                          .map((stageDef, index, arr) => {
+                            const count = stats.stats.Inbound[stageDef.name] || 0;
+                            const maxCount = Math.max(...Object.values(stats.stats.Inbound));
+                            const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
+                            const isActive = count > 0;
 
-                        if (!isActive && count === 0) return null; // Skip inactive stages
+                            return (
+                              <div key={stageDef.name} className="pipeline-stage-wrapper">
+                                <div
+                                  className={`pipeline-stage ${isActive ? 'active' : 'inactive'}`}
+                                  style={{
+                                    backgroundColor: isActive ? stageDef.color : '#e0e0e0',
+                                    opacity: isActive ? Math.max(0.3 + (percentage / 100) * 0.7, 0.4) : 0.3
+                                  }}
+                                >
+                                  <div className="stage-icon">{stageDef.icon}</div>
+                                  <div className="stage-name">{stageDef.name}</div>
+                                  {isActive && (
+                                    <div className="stage-count">{count.toLocaleString()}</div>
+                                  )}
+                                </div>
+                                {index < arr.length - 1 && (
+                                  <div className="stage-arrow">→</div>
+                                )}
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
 
-                        return (
-                          <div key={stageDef.name} className={`pipeline-stage-wrapper ${isBranch ? 'branch-' + stageDef.branch : ''}`}>
-                            <div
-                              className={`pipeline-stage ${isActive ? 'active' : 'inactive'}`}
-                              style={{
-                                backgroundColor: isActive ? stageDef.color : '#e0e0e0',
-                                opacity: isActive ? Math.max(0.3 + (percentage / 100) * 0.7, 0.4) : 0.3
-                              }}
-                            >
-                              <div className="stage-icon">{stageDef.icon}</div>
-                              <div className="stage-name">{stageDef.name}</div>
-                              {isActive && (
-                                <div className="stage-count">{count.toLocaleString()}</div>
-                              )}
-                            </div>
-                            {index < PIPELINE_DEFINITIONS.Inbound.length - 1 && !isBranch && (
-                              <div className="stage-arrow">→</div>
-                            )}
-                          </div>
-                        );
-                      })}
+                    {/* Branching Point */}
+                    <div className="pipeline-branches">
+                      {/* Local Delivery Branch */}
+                      <div className="pipeline-branch local">
+                        <div className="branch-header">
+                          <span className="branch-arrow">⤷</span>
+                          <span className="branch-label">Local Delivery Path</span>
+                        </div>
+                        <div className="pipeline-stages">
+                          {PIPELINE_DEFINITIONS.Inbound
+                            .filter(s => s.branch === 'local')
+                            .map((stageDef, index, arr) => {
+                              const count = stats.stats.Inbound[stageDef.name] || 0;
+                              const maxCount = Math.max(...Object.values(stats.stats.Inbound));
+                              const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
+                              const isActive = count > 0;
+
+                              return (
+                                <div key={stageDef.name} className="pipeline-stage-wrapper">
+                                  <div
+                                    className={`pipeline-stage ${isActive ? 'active' : 'inactive'}`}
+                                    style={{
+                                      backgroundColor: isActive ? stageDef.color : '#e0e0e0',
+                                      opacity: isActive ? Math.max(0.3 + (percentage / 100) * 0.7, 0.4) : 0.3
+                                    }}
+                                  >
+                                    <div className="stage-icon">{stageDef.icon}</div>
+                                    <div className="stage-name">{stageDef.name}</div>
+                                    {isActive && (
+                                      <div className="stage-count">{count.toLocaleString()}</div>
+                                    )}
+                                  </div>
+                                  {index < arr.length - 1 && (
+                                    <div className="stage-arrow">→</div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </div>
+
+                      {/* Forward Branch */}
+                      <div className="pipeline-branch forward">
+                        <div className="branch-header">
+                          <span className="branch-arrow">⤷</span>
+                          <span className="branch-label">Forward Path</span>
+                        </div>
+                        <div className="pipeline-stages">
+                          {PIPELINE_DEFINITIONS.Inbound
+                            .filter(s => s.branch === 'forward')
+                            .map((stageDef, index, arr) => {
+                              const count = stats.stats.Inbound[stageDef.name] || 0;
+                              const maxCount = Math.max(...Object.values(stats.stats.Inbound));
+                              const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
+                              const isActive = count > 0;
+
+                              return (
+                                <div key={stageDef.name} className="pipeline-stage-wrapper">
+                                  <div
+                                    className={`pipeline-stage ${isActive ? 'active' : 'inactive'}`}
+                                    style={{
+                                      backgroundColor: isActive ? stageDef.color : '#e0e0e0',
+                                      opacity: isActive ? Math.max(0.3 + (percentage / 100) * 0.7, 0.4) : 0.3
+                                    }}
+                                  >
+                                    <div className="stage-icon">{stageDef.icon}</div>
+                                    <div className="stage-name">{stageDef.name}</div>
+                                    {isActive && (
+                                      <div className="stage-count">{count.toLocaleString()}</div>
+                                    )}
+                                  </div>
+                                  {index < arr.length - 1 && (
+                                    <div className="stage-arrow">→</div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -329,13 +412,11 @@ function RealtimeView() {
                     </div>
 
                     <div className="pipeline-stages">
-                      {PIPELINE_DEFINITIONS.Outbound.map((stageDef, index) => {
+                      {PIPELINE_DEFINITIONS.Outbound.map((stageDef, index, arr) => {
                         const count = stats.stats.Outbound[stageDef.name] || 0;
                         const maxCount = Math.max(...Object.values(stats.stats.Outbound));
                         const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
                         const isActive = count > 0;
-
-                        if (!isActive && count === 0) return null; // Skip inactive stages
 
                         return (
                           <div key={stageDef.name} className="pipeline-stage-wrapper">
@@ -352,7 +433,7 @@ function RealtimeView() {
                                 <div className="stage-count">{count.toLocaleString()}</div>
                               )}
                             </div>
-                            {index < PIPELINE_DEFINITIONS.Outbound.length - 1 && (
+                            {index < arr.length - 1 && (
                               <div className="stage-arrow">→</div>
                             )}
                           </div>
