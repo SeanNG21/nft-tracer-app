@@ -3,6 +3,7 @@
 Multi-Function NFT Tracer - Backend Integration
 Compatible với app.py backend và realtime WebSocket
 Output format giống NFT/Full tracer để dùng chung frontend
+AUTO BTF DISCOVERY - giống PWru
 """
 
 import os
@@ -16,6 +17,10 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Callable
 from dataclasses import dataclass, asdict
 from bcc import BPF
+
+# Import BTF discoverer for auto-discovery
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'discovery'))
+from enhanced_skb_discoverer import EnhancedSKBDiscoverer
 
 # Event types
 EVENT_FUNCTION = 0
@@ -122,8 +127,12 @@ class MultiFunctionBackendTracer:
         self.last_stats_emit = time.time()
 
     def load_functions(self):
-        """Load functions to trace from config"""
+        """
+        Load functions to trace
+        AUTO-DISCOVERY: Scan BTF if no config provided (like PWru)
+        """
         if self.config_file and os.path.exists(self.config_file):
+            # Method 1: Load from config file
             with open(self.config_file, 'r') as f:
                 config = json.load(f)
 
@@ -132,17 +141,61 @@ class MultiFunctionBackendTracer:
                 if f.get('enabled', True)
             ][:self.max_functions]
 
-            print(f"[✓] Loaded {len(self.functions_to_trace)} functions from config")
+            print(f"[✓] Loaded {len(self.functions_to_trace)} functions from config: {self.config_file}")
         else:
-            # Fallback: critical functions
-            self.functions_to_trace = [
-                {'name': '__netif_receive_skb_core', 'layer': 'Device', 'priority': 0},
-                {'name': 'ip_rcv', 'layer': 'IPv4', 'priority': 0},
-                {'name': 'ip_local_deliver', 'layer': 'IPv4', 'priority': 0},
-                {'name': 'tcp_v4_rcv', 'layer': 'TCP', 'priority': 0},
-                {'name': 'dev_queue_xmit', 'layer': 'Xmit', 'priority': 0},
-            ]
-            print(f"[!] Using {len(self.functions_to_trace)} critical functions")
+            # Method 2: AUTO-DISCOVERY via BTF (PWru style)
+            print(f"[*] No config file found - running AUTO BTF DISCOVERY")
+            print(f"[*] Scanning kernel BTF for sk_buff functions...")
+
+            discovered_funcs = self._auto_discover_functions()
+
+            if discovered_funcs:
+                # Convert SKBFunction to tracer format
+                self.functions_to_trace = [
+                    {
+                        'name': f.name,
+                        'layer': f.layer,
+                        'category': f.category,
+                        'priority': f.priority,
+                        'enabled': True
+                    }
+                    for f in discovered_funcs[:self.max_functions]
+                ]
+                print(f"[✓] Auto-discovered {len(self.functions_to_trace)} functions via BTF")
+            else:
+                # Fallback: critical functions only
+                print(f"[!] BTF discovery failed - using hardcoded critical functions")
+                self.functions_to_trace = [
+                    {'name': '__netif_receive_skb_core', 'layer': 'Device', 'priority': 0},
+                    {'name': 'ip_rcv', 'layer': 'IPv4', 'priority': 0},
+                    {'name': 'ip_local_deliver', 'layer': 'IPv4', 'priority': 0},
+                    {'name': 'tcp_v4_rcv', 'layer': 'TCP', 'priority': 0},
+                    {'name': 'dev_queue_xmit', 'layer': 'Xmit', 'priority': 0},
+                ]
+
+    def _auto_discover_functions(self) -> List:
+        """
+        Auto-discover SKB functions via BTF (PWru approach)
+        Returns: List of SKBFunction objects sorted by priority
+        """
+        try:
+            discoverer = EnhancedSKBDiscoverer()
+            all_functions = discoverer.discover_all()
+
+            # Filter by priority (0=critical, 1=important, 2=optional)
+            # Default: only trace priority 0 and 1 for auto-discovery
+            filtered = [f for f in all_functions if f.priority <= 1]
+
+            # Sort by priority, then layer
+            sorted_funcs = sorted(filtered, key=lambda x: (x.priority, x.layer, x.name))
+
+            return sorted_funcs
+
+        except Exception as e:
+            print(f"[!] Auto-discovery error: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
 
     def _generate_bpf_code(self) -> str:
         """Generate BPF code dynamically"""

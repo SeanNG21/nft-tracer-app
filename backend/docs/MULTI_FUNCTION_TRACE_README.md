@@ -63,11 +63,47 @@ python3 -c "from bcc import BPF; print('BCC OK')"
 
 ## Sử dụng
 
-### 1. Discovery - Tìm tất cả SKB functions
+### 🚀 **NEW: Runtime Auto-Discovery (PWru Style)**
+
+Tracer giờ tự động scan BTF khi start - **KHÔNG CẦN** chạy discovery script riêng!
 
 ```bash
-# Chạy discovery để tìm và phân loại functions
-sudo python3 enhanced_skb_discoverer.py \
+# Cách 1: Auto-discovery runtime (RECOMMENDED - giống PWru)
+# Tracer sẽ tự động scan BTF khi start
+sudo python3 multi_function_backend.py --max-functions 50 --duration 60
+
+# Hoặc qua API:
+curl -X POST http://localhost:5000/api/multi-function/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "max_functions": 50
+  }'
+# Khi không có config file, tracer tự động scan BTF!
+```
+
+**Cách hoạt động:**
+```
+┌─────────────────────────────────────┐
+│ Start tracer (no config)            │
+│   ↓                                 │
+│ Auto BTF scan                       │
+│   /sys/kernel/btf/vmlinux           │
+│   ↓                                 │
+│ Parse all functions với skb param   │
+│   ↓                                 │
+│ Filter priority 0-1 (critical+important) │
+│   ↓                                 │
+│ Attach & trace ngay                 │
+└─────────────────────────────────────┘
+```
+
+### 1. [OPTIONAL] Pre-Discovery - Tạo config file
+
+Nếu muốn customize function list, chạy discovery trước:
+
+```bash
+# Chạy discovery để tạo config file
+sudo python3 discovery/enhanced_skb_discoverer.py \
     --output enhanced_skb_functions.json \
     --config trace_config.json \
     --max-trace 100 \
@@ -78,19 +114,21 @@ Output:
 - `enhanced_skb_functions.json`: Danh sách đầy đủ functions (có thể 5000-10000 functions)
 - `trace_config.json`: Config cho tracer (top 100 functions theo priority)
 
-### 2. Multi-Function Trace - Trace packet journey
+### 2. Multi-Function Trace với Config File
 
 ```bash
-# Chạy tracer với auto-discovery
-sudo python3 multi_function_nft_tracer.py \
-    --discover \
-    --max-functions 50 \
-    --duration 60
-
-# Hoặc dùng config có sẵn
-sudo python3 multi_function_nft_tracer.py \
+# Cách 2: Dùng config có sẵn (nếu đã chạy discovery)
+sudo python3 multi_function_backend.py \
     --config trace_config.json \
     --duration 60
+
+# Hoặc qua API:
+curl -X POST http://localhost:5000/api/multi-function/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "config": "trace_config.json",
+    "max_functions": 50
+  }'
 ```
 
 ### 3. Generate Traffic để test

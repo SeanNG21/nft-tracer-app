@@ -28,7 +28,10 @@ def add_multi_function_routes(app, socketio=None):
 
     @app.route('/api/multi-function/start', methods=['POST'])
     def start_multi_function():
-        """Start multi-function tracer"""
+        """
+        Start multi-function tracer
+        AUTO-DISCOVERY: If no config file, will auto-scan BTF (PWru style)
+        """
         global multi_tracer, multi_tracer_thread
 
         with multi_tracer_lock:
@@ -38,8 +41,15 @@ def add_multi_function_routes(app, socketio=None):
             try:
                 # Get config from request
                 data = request.get_json() or {}
-                config_file = data.get('config', 'trace_config.json')
+                config_file = data.get('config', None)  # None = auto-discovery
                 max_functions = data.get('max_functions', 50)
+
+                # Check if auto-discovery mode
+                auto_discovery = (config_file is None or not os.path.exists(config_file))
+                if auto_discovery:
+                    print(f"[*] AUTO-DISCOVERY MODE (no config file)")
+                else:
+                    print(f"[*] CONFIG MODE: {config_file}")
 
                 # Event callback: emit via WebSocket
                 def event_callback(evt: MultiFunctionEvent):
@@ -79,13 +89,16 @@ def add_multi_function_routes(app, socketio=None):
                 if socketio:
                     socketio.emit('multi_function_status', {
                         'running': True,
-                        'functions_count': len(multi_tracer.functions_to_trace)
+                        'functions_count': len(multi_tracer.functions_to_trace),
+                        'auto_discovery': auto_discovery
                     })
 
                 return jsonify({
                     'status': 'started',
                     'functions_count': len(multi_tracer.functions_to_trace),
-                    'config': config_file
+                    'config': config_file if not auto_discovery else 'AUTO-DISCOVERY (BTF)',
+                    'auto_discovery': auto_discovery,
+                    'mode': 'auto-btf' if auto_discovery else 'config'
                 })
 
             except Exception as e:
@@ -129,10 +142,15 @@ def add_multi_function_routes(app, socketio=None):
         with multi_tracer_lock:
             if multi_tracer and multi_tracer.running:
                 stats = multi_tracer.get_stats()
+                # Detect if using auto-discovery (no config_file or doesn't exist)
+                auto_discovery = (not multi_tracer.config_file or
+                                not os.path.exists(multi_tracer.config_file))
                 return jsonify({
                     'running': True,
                     'stats': stats,
-                    'functions_count': len(multi_tracer.functions_to_trace)
+                    'functions_count': len(multi_tracer.functions_to_trace),
+                    'auto_discovery': auto_discovery,
+                    'mode': 'auto-btf' if auto_discovery else 'config'
                 })
             else:
                 return jsonify({
