@@ -298,10 +298,9 @@ int kprobe__nft_do_chain(struct pt_regs *ctx)
         return 0;
     }
 
-    // Store with TID as key for kretprobe to retrieve
-    if (evt.skb_addr != 0) {
-        skb_info_map.update(&tid, &evt);
-    }
+    // Store with TID as key for kretprobe and nft_immediate_eval to retrieve
+    // IMPORTANT: Always store, even if skb_addr == 0, so nft_immediate_eval can access it
+    skb_info_map.update(&tid, &evt);
 
     // FIX #1: DO NOT emit event here - wait for kretprobe to emit chain_exit with verdict
     // This eliminates duplicate chain_exit events
