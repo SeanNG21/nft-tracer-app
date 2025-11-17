@@ -135,9 +135,8 @@ FUNCTION_TO_LAYER = {
     'udp_rcv': 'TCP/UDP',
     'udp_unicast_rcv_skb': 'TCP/UDP',
 
-    # Socket
-    'sock_def_readable': 'Socket',
-    'sk_filter_trim_cap': 'Socket',
+    # Socket Layer (removed sock_def_readable - too noisy)
+    '__skb_recv_datagram': 'Socket',
 
     # Forward
     'ip_forward': 'Forward',
@@ -646,23 +645,35 @@ class PacketTrace:
 
         EXCLUSION CRITERIA (always filtered):
         - Packets from/to application ports (frontend/backend self-tracing)
+        - Traces with NO packet metadata AND no NFT activity (likely non-IPv4 or incomplete)
 
         VALUE CRITERIA (trace is kept if it meets ANY):
         1. Has complete packet info (protocol, IPs, ports)
-        2. Has multiple events (>= 2) showing actual packet processing
+        2. Has multiple events (>= 3) showing actual packet processing WITH some metadata
         3. Has NFT rule evaluation (indicates firewall interaction)
         4. Has verdict changes (indicates complex firewall logic)
-        5. Has duration >= 10 microseconds (indicates significant processing)
+        5. Has duration >= 10 microseconds (indicates significant processing) WITH some metadata
 
         This filters out low-value traces like:
         - Single-function traces with no packet metadata
         - Incomplete traces from non-IPv4 packets
         - Driver-level traces that don't show full processing
         - Self-tracing packets (frontend <-> backend communication)
+        - Socket/userspace traces with no network layer info
         """
         # EXCLUSION: Filter out self-tracing packets (frontend <-> backend)
         # This prevents logging the application's own HTTP/WebSocket traffic
         if self.src_port in EXCLUDED_PORTS or self.dst_port in EXCLUDED_PORTS:
+            return False
+
+        # EXCLUSION: Traces with absolutely no packet metadata
+        # UNLESS they have NFT verdict (which is valuable even without IP info)
+        has_no_metadata = (
+            self.protocol is None and
+            self.src_ip is None and
+            self.dst_ip is None
+        )
+        if has_no_metadata and self.final_verdict is None:
             return False
 
         # Criterion 1: Has complete packet info
@@ -673,7 +684,8 @@ class PacketTrace:
         )
 
         # Criterion 2: Has multiple events (actual processing)
-        has_multiple_events = len(self.events) >= 2
+        # Increased threshold to 3 to filter out trivial 2-event traces
+        has_multiple_events = len(self.events) >= 3
 
         # Criterion 3: Has NFT rule evaluation
         has_nft_activity = self.total_rules_evaluated > 0
@@ -686,12 +698,16 @@ class PacketTrace:
         duration_ns = self.last_seen - self.first_seen
         has_significant_duration = duration_ns >= 10000
 
+        # Keep trace if it meets ANY value criterion
+        # For traces without complete info, require NFT activity or significant events
+        if has_complete_info:
+            return True
+
+        # For incomplete traces, require stronger evidence of value
         return (
-            has_complete_info or
-            has_multiple_events or
             has_nft_activity or
             has_verdict_changes or
-            has_significant_duration
+            (has_multiple_events and has_significant_duration)
         )
 
     def to_summary(self) -> Dict:

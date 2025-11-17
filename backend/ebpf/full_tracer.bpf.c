@@ -119,81 +119,106 @@ static __always_inline u64 extract_rule_handle(void *expr)
     return 0;
 }
 
+// Helper: check if packet should be skipped (self-tracing prevention)
+// Returns 1 if packet should be SKIPPED, 0 if should be traced
+static __always_inline int should_skip_packet(u16 sport, u16 dport)
+{
+    // Skip packets from/to application ports to prevent self-tracing
+    // Backend port: 5000, Frontend port: 3000
+    if (sport == 5000 || dport == 5000 ||
+        sport == 3000 || dport == 3000) {
+        return 1;
+    }
+    return 0;
+}
+
 // Helper: extract packet info from sk_buff
-static __always_inline void extract_packet_info_from_skb(void *skb, struct trace_event *evt)
+// Returns 1 if packet should be SKIPPED, 0 if should be traced
+static __always_inline int extract_packet_info_from_skb(void *skb, struct trace_event *evt)
 {
     if (!skb)
-        return;
-    
+        return 0;
+
     evt->skb_addr = (u64)skb;
-    
+
     // Get length
     u32 len = 0;
     bpf_probe_read_kernel(&len, sizeof(len), (char *)skb + 0x88);
     evt->length = len;
-    
+
     // Get IP header pointer
     void *ip_header = NULL;
     bpf_probe_read_kernel(&ip_header, sizeof(ip_header), (char *)skb + 0xd0);
-    
+
     if (!ip_header)
-        return;
-    
+        return 0;
+
     u8 ihl_version = 0;
     u8 protocol = 0;
     u32 saddr = 0;
     u32 daddr = 0;
-    
+
     bpf_probe_read_kernel(&ihl_version, sizeof(ihl_version), ip_header);
     u8 version = (ihl_version >> 4) & 0x0F;
-    
+
     if (version != 4)
-        return;
-    
+        return 0;
+
     bpf_probe_read_kernel(&protocol, sizeof(protocol), (char *)ip_header + 9);
     bpf_probe_read_kernel(&saddr, sizeof(saddr), (char *)ip_header + 12);
     bpf_probe_read_kernel(&daddr, sizeof(daddr), (char *)ip_header + 16);
-    
+
     evt->protocol = protocol;
     evt->src_ip = saddr;
     evt->dst_ip = daddr;
-    
+
     // Extract ports
     if (protocol == 6 || protocol == 17) {
         u8 ihl = (ihl_version & 0x0F) * 4;
         void *trans_header = (char *)ip_header + ihl;
-        
+
         u16 sport = 0;
         u16 dport = 0;
-        
+
         bpf_probe_read_kernel(&sport, sizeof(sport), trans_header);
         bpf_probe_read_kernel(&dport, sizeof(dport), (char *)trans_header + 2);
-        
+
         evt->src_port = bpf_ntohs(sport);
         evt->dst_port = bpf_ntohs(dport);
+
+        // Check if this packet should be skipped
+        if (should_skip_packet(evt->src_port, evt->dst_port)) {
+            return 1;  // Skip this packet
+        }
     }
+
+    return 0;  // Trace this packet
 }
 
 // Helper: extract packet info from nft_pktinfo
-static __always_inline void extract_packet_info_from_pkt(void *pkt, struct trace_event *evt)
+// Returns 1 if packet should be SKIPPED, 0 if should be traced
+static __always_inline int extract_packet_info_from_pkt(void *pkt, struct trace_event *evt)
 {
     if (!pkt)
-        return;
-    
+        return 0;
+
     void *skb = NULL;
     void *state = NULL;
-    
+
     bpf_probe_read_kernel(&skb, sizeof(skb), pkt);
     bpf_probe_read_kernel(&state, sizeof(state), (char *)pkt + 8);
-    
+
+    int should_skip = 0;
     if (skb) {
-        extract_packet_info_from_skb(skb, evt);
+        should_skip = extract_packet_info_from_skb(skb, evt);
     }
-    
+
     if (state) {
         bpf_probe_read_kernel(&evt->hook, sizeof(evt->hook), state);
         bpf_probe_read_kernel(&evt->pf, sizeof(evt->pf), (char *)state + 1);
     }
+
+    return should_skip;
 }
 
 // ==============================================
@@ -212,14 +237,13 @@ int trace_skb_func(struct pt_regs *ctx, struct sk_buff *skb)
     // CRITICAL: Get function IP for name lookup in userspace
     evt.func_ip = PT_REGS_IP(ctx);
 
-    extract_packet_info_from_skb(skb, &evt);
-    read_comm_safe(evt.comm, sizeof(evt.comm));
-
-    // FILTER: Skip packets from/to app ports (3000=frontend, 5000=backend) to avoid loops
-    if (evt.src_port == 3000 || evt.dst_port == 3000 ||
-        evt.src_port == 5000 || evt.dst_port == 5000) {
-        return 0;
+    // Extract packet info and check if should skip
+    int should_skip = extract_packet_info_from_skb(skb, &evt);
+    if (should_skip) {
+        return 0;  // Skip self-tracing packets (ports 3000, 5000)
     }
+
+    read_comm_safe(evt.comm, sizeof(evt.comm));
 
     // Store in map for NFT hooks using TID as key (consistent with kretprobe)
     if (evt.skb_addr != 0) {
@@ -258,12 +282,9 @@ int kprobe__nft_do_chain(struct pt_regs *ctx)
     evt.chain_addr = (u64)priv;
     evt.chain_depth = depth;
 
-    extract_packet_info_from_pkt(pkt, &evt);
-    read_comm_safe(evt.comm, sizeof(evt.comm));
-
-    // FILTER: Skip packets from/to app ports (3000=frontend, 5000=backend) to avoid loops
-    if (evt.src_port == 3000 || evt.dst_port == 3000 ||
-        evt.src_port == 5000 || evt.dst_port == 5000) {
+    // Extract packet info and check if should skip
+    int should_skip = extract_packet_info_from_pkt(pkt, &evt);
+    if (should_skip) {
         // Cleanup depth map before returning
         if (cur_depth && *cur_depth > 0) {
             u8 new_depth = *cur_depth - 1;
@@ -271,8 +292,10 @@ int kprobe__nft_do_chain(struct pt_regs *ctx)
         } else {
             depth_map.delete(&tid);
         }
-        return 0;
+        return 0;  // Skip self-tracing packets
     }
+
+    read_comm_safe(evt.comm, sizeof(evt.comm));
 
     // Store with TID as key for kretprobe to retrieve
     if (evt.skb_addr != 0) {
