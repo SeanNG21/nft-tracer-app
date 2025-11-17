@@ -257,6 +257,12 @@ static __always_inline int trace_skb_generic(struct pt_regs *ctx, struct sk_buff
         pkt = &new_pkt;
     }
 
+    // FILTER: Skip packets from/to app ports (3000=frontend, 5000=backend) to avoid loops
+    if (pkt->src_port == 3000 || pkt->dst_port == 3000 ||
+        pkt->src_port == 5000 || pkt->dst_port == 5000) {
+        return 0;
+    }
+
     pkt->function_count++;
     packet_map.update(&skb_addr, pkt);
 
@@ -323,6 +329,19 @@ int kprobe__nft_do_chain(struct pt_regs *ctx)
         pkt->chain_addr = (u64)priv;
         pkt->chain_depth = depth;
         tid_map.update(&tid, pkt);
+    }
+
+    // FILTER: Skip packets from/to app ports (3000=frontend, 5000=backend) to avoid loops
+    if (pkt->src_port == 3000 || pkt->dst_port == 3000 ||
+        pkt->src_port == 5000 || pkt->dst_port == 5000) {
+        // Cleanup depth map before returning
+        if (cur_depth && *cur_depth > 0) {
+            u8 new_depth = *cur_depth - 1;
+            depth_map.update(&tid, &new_depth);
+        } else {
+            depth_map.delete(&tid);
+        }
+        return 0;
     }
 
     struct trace_event evt = {};
@@ -499,6 +518,12 @@ int kprobe__nf_hook_slow(struct pt_regs *ctx)
         new_pkt.function_count = 0;
         extract_packet_info((struct sk_buff *)skb, &new_pkt);
         pkt = &new_pkt;
+    }
+
+    // FILTER: Skip packets from/to app ports (3000=frontend, 5000=backend) to avoid loops
+    if (pkt->src_port == 3000 || pkt->dst_port == 3000 ||
+        pkt->src_port == 5000 || pkt->dst_port == 5000) {
+        return 0;
     }
 
     // Update hook state

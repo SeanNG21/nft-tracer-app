@@ -740,7 +740,6 @@ class PacketTrace:
 
             # Direction and pipeline
             'direction': self.direction or 'Unknown',
-            'pipeline': PIPELINE_STRUCTURE.get(self.direction, []) if self.direction else [],
             'stages': sorted_stages,
             'pipeline_summary': pipeline_summary,
 
