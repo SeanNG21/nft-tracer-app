@@ -1437,10 +1437,15 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
             trace = self.packet_traces[skb_addr]
             trace.add_nft_event(nft_event)
 
-            if nft_event.trace_type == 0:
-                # FIX: Add STOLEN (2), QUEUE (3), STOP (5) to terminal verdicts
-                # These verdicts also end packet lifecycle and should cleanup immediately
-                if nft_event.verdict in [0, 1, 2, 3, 5]:  # DROP, ACCEPT, STOLEN, QUEUE, STOP
+            # FIX: Only cleanup on final chain_exit with terminal DROP/STOLEN
+            # A packet may traverse multiple hooks (PREROUTING->INPUT or OUTPUT->POSTROUTING)
+            # Each hook has its own chain_exit. Only cleanup at the FINAL chain_exit to avoid
+            # splitting events from the same packet into multiple logs.
+            # - chain_depth = 0: exiting base chain (not nested jump)
+            # - verdict DROP (0) or STOLEN (2): packet lifecycle truly ends
+            # - ACCEPT (1) means packet continues to next hook, so don't cleanup yet
+            if nft_event.trace_type == 0 and nft_event.chain_depth == 0:
+                if nft_event.verdict in [0, 2]:  # Only DROP and STOLEN are final
                     self.completed_traces.append(trace)
                     del self.packet_traces[skb_addr]
     
@@ -1559,11 +1564,13 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                         # Silent fail - don't break session if realtime fails
                         pass
 
-                # FIX: Add terminal verdicts to cleanup packet traces immediately
-                if event.event_type == 1 and event.verdict in [0, 1, 2, 3, 5]:  # DROP, ACCEPT, STOLEN, QUEUE, STOP
-                    if skb_addr in self.packet_traces:
-                        self.completed_traces.append(trace)
-                        del self.packet_traces[skb_addr]
+                # FIX: Only cleanup on final chain_exit to avoid splitting packet events
+                # Same logic as NFT mode: chain_depth=0 + terminal DROP/STOLEN verdict
+                if event.event_type == 1 and event.chain_depth == 0:
+                    if event.verdict in [0, 2]:  # Only DROP and STOLEN are final
+                        if skb_addr in self.packet_traces:
+                            self.completed_traces.append(trace)
+                            del self.packet_traces[skb_addr]
     
     def _handle_universal_event(self, cpu, data, size):
         event = self.bpf_universal["events"].event(data)
@@ -1699,12 +1706,13 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                 )
                 trace.add_nft_event(nft_event)
 
-                # FIX: Mark packet as complete on terminal verdicts
-                # Include STOLEN (2), QUEUE (3), STOP (5) to prevent SKB address reuse
-                if event.event_type == 1 and event.verdict in [0, 1, 2, 3, 5]:  # DROP, ACCEPT, STOLEN, QUEUE, STOP
-                    if skb_addr in self.packet_traces:
-                        self.completed_traces.append(trace)
-                        del self.packet_traces[skb_addr]
+                # FIX: Only cleanup on final chain_exit to avoid splitting packet events
+                # Same logic: chain_depth=0 + terminal DROP/STOLEN verdict only
+                if event.event_type == 1 and event.chain_depth == 0:
+                    if event.verdict in [0, 2]:  # Only DROP and STOLEN are final
+                        if skb_addr in self.packet_traces:
+                            self.completed_traces.append(trace)
+                            del self.packet_traces[skb_addr]
 
     def _get_skb_addr(self, skb_addr: int, chain_addr: int) -> int:
         if skb_addr == 0:
