@@ -1048,6 +1048,11 @@
   box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
 }
 
+/* Main flow container */
+.pipeline-main-flow {
+  margin-bottom: 1.5rem;
+}
+
 .pipeline-stages {
   display: flex;
   flex-wrap: wrap;
@@ -1061,34 +1066,85 @@
   gap: 0.5rem;
 }
 
-.pipeline-stage-wrapper.branch-local {
-  margin-top: 2rem;
+/* Branching container */
+.pipeline-branches {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 2px dashed #bbb;
   position: relative;
 }
 
-.pipeline-stage-wrapper.branch-local::before {
-  content: '⤷ Local';
+.pipeline-branches::before {
+  content: '⬇ Branching Point ⬇';
   position: absolute;
-  top: -1.5rem;
-  left: 0;
-  font-size: 0.8rem;
-  color: #26c6da;
+  top: -0.7rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #f8f9fa;
+  padding: 0 1rem;
+  color: #666;
   font-weight: 600;
+  font-size: 0.85rem;
 }
 
-.pipeline-stage-wrapper.branch-forward {
-  margin-top: 2rem;
-  position: relative;
+/* Individual branch */
+.pipeline-branch {
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 8px;
+  padding: 1rem;
+  border: 2px solid #e0e0e0;
+  transition: all 0.3s ease;
 }
 
-.pipeline-stage-wrapper.branch-forward::before {
-  content: '⤷ Forward';
-  position: absolute;
-  top: -1.5rem;
-  left: 0;
-  font-size: 0.8rem;
-  color: #ff9800;
-  font-weight: 600;
+.pipeline-branch:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.pipeline-branch.local {
+  border-left: 4px solid #26c6da;
+  background: linear-gradient(90deg, rgba(38, 198, 218, 0.05) 0%, rgba(255, 255, 255, 0.5) 10%);
+}
+
+.pipeline-branch.forward {
+  border-left: 4px solid #ff9800;
+  background: linear-gradient(90deg, rgba(255, 152, 0, 0.05) 0%, rgba(255, 255, 255, 0.5) 10%);
+}
+
+/* Branch header */
+.branch-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.branch-arrow {
+  font-size: 1.5rem;
+  color: #666;
+  animation: branch-pulse 2s ease-in-out infinite;
+}
+
+@keyframes branch-pulse {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.branch-label {
+  font-weight: 700;
+  font-size: 1rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .pipeline-stage {
