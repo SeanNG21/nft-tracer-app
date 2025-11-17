@@ -276,44 +276,12 @@ static __always_inline int trace_network_function(struct pt_regs *ctx, struct sk
 }
 
 // ==============================================
-// NIC LAYER
-// ==============================================
-int kprobe__e1000_clean_rx_irq(struct pt_regs *ctx, void *rx_ring, int budget) {
-    // This doesn't get sk_buff directly, skip for now
-    return 0;
-}
-
-int kprobe__ixgbe_clean_rx_irq(struct pt_regs *ctx, void *q_vector, void *rx_ring, int budget) {
-    // This doesn't get sk_buff directly, skip for now
-    return 0;
-}
-
-int kprobe__mlx5e_poll_rx_cq(struct pt_regs *ctx, void *cq, int budget) {
-    // This doesn't get sk_buff directly, skip for now
-    return 0;
-}
-
-// ==============================================
 // DRIVER (NAPI) LAYER
 // ==============================================
-int kprobe____napi_poll(struct pt_regs *ctx) {
-    // Doesn't have skb parameter
-    return 0;
-}
 
 int kprobe__netif_receive_skb(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     return trace_network_function(ctx, skb);
-}
-
-int kprobe__netif_receive_skb_list(struct pt_regs *ctx) {
-    // List function - would need special handling
-    return 0;
-}
-
-int kprobe__netif_receive_skb_list_internal(struct pt_regs *ctx) {
-    // List function - would need special handling
-    return 0;
 }
 
 // ==============================================
@@ -324,84 +292,16 @@ int kprobe__napi_gro_receive(struct pt_regs *ctx) {
     return trace_network_function(ctx, skb);
 }
 
-int kprobe__dev_gro_receive(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM2(ctx);
-    return trace_network_function(ctx, skb);
-}
-
-int kprobe__inet_gro_receive(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM2(ctx);
-    return trace_network_function(ctx, skb);
-}
-
-int kprobe__tcp_gro_receive(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM2(ctx);
-    return trace_network_function(ctx, skb);
-}
+// ==============================================
+// TC INGRESS LAYER (optional - may not exist in all kernels)
+// ==============================================
+// Removed: sch_handle_ingress, tcf_classify, tcf_exts_exec, cls_bpf_classify
+// These functions are not available in all kernel versions
 
 // ==============================================
-// TC INGRESS LAYER
+// CONNTRACK/NAT LAYER - Removed (optional, use NFT tracing instead)
 // ==============================================
-int kprobe__sch_handle_ingress(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
-    return trace_network_function(ctx, skb);
-}
-
-int kprobe__tcf_classify(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
-    return trace_network_function(ctx, skb);
-}
-
-int kprobe__tcf_exts_exec(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
-    return trace_network_function(ctx, skb);
-}
-
-int kprobe__cls_bpf_classify(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
-    return trace_network_function(ctx, skb);
-}
-
-// ==============================================
-// CONNTRACK LAYER
-// ==============================================
-int kprobe__nf_conntrack_in(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
-    return trace_network_function(ctx, skb);
-}
-
-int kprobe__nf_confirm(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
-    return trace_network_function(ctx, skb);
-}
-
-int kprobe__nf_conntrack_tcp_packet(struct pt_regs *ctx) {
-    // Complex signature, skip
-    return 0;
-}
-
-int kprobe__nf_conntrack_handle_packet(struct pt_regs *ctx) {
-    // May not exist in all kernels
-    return 0;
-}
-
-// ==============================================
-// NAT LAYER
-// ==============================================
-int kprobe__nf_nat_ipv4_in(struct pt_regs *ctx) {
-    // Complex signature with state
-    return 0;
-}
-
-int kprobe__nf_nat_packet(struct pt_regs *ctx) {
-    // Complex signature
-    return 0;
-}
-
-int kprobe__nf_nat_inet_fn(struct pt_regs *ctx) {
-    // Complex signature
-    return 0;
-}
+// These are traced via NFT hooks instead
 
 // ==============================================
 // ROUTING DECISION LAYER
@@ -409,21 +309,6 @@ int kprobe__nf_nat_inet_fn(struct pt_regs *ctx) {
 int kprobe__ip_route_input_slow(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     return trace_network_function(ctx, skb);
-}
-
-int kprobe__ip_route_input_noref(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
-    return trace_network_function(ctx, skb);
-}
-
-int kprobe__fib_validate_source(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
-    return trace_network_function(ctx, skb);
-}
-
-int kprobe__fib_table_lookup(struct pt_regs *ctx) {
-    // Doesn't have skb parameter
-    return 0;
 }
 
 // ==============================================
@@ -444,18 +329,7 @@ int kprobe__udp_rcv(struct pt_regs *ctx) {
     return trace_network_function(ctx, skb);
 }
 
-int kprobe__udp_unicast_rcv_skb(struct pt_regs *ctx) {
-    // Second parameter is skb
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM2(ctx);
-    return trace_network_function(ctx, skb);
-}
-
 int kprobe__tcp_v4_do_rcv(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM2(ctx);
-    return trace_network_function(ctx, skb);
-}
-
-int kprobe__sock_queue_rcv_skb(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM2(ctx);
     return trace_network_function(ctx, skb);
 }
@@ -468,17 +342,7 @@ int kprobe__dev_queue_xmit(struct pt_regs *ctx) {
     return trace_network_function(ctx, skb);
 }
 
-int kprobe____dev_queue_xmit(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
-    return trace_network_function(ctx, skb);
-}
-
 int kprobe__dev_hard_start_xmit(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
-    return trace_network_function(ctx, skb);
-}
-
-int kprobe__sch_direct_xmit(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     return trace_network_function(ctx, skb);
 }
@@ -486,21 +350,6 @@ int kprobe__sch_direct_xmit(struct pt_regs *ctx) {
 // ==============================================
 // OUTBOUND APPLICATION LAYER
 // ==============================================
-int kprobe__tcp_sendmsg(struct pt_regs *ctx) {
-    // First param is socket, not skb
-    return 0;
-}
-
-int kprobe__udp_sendmsg(struct pt_regs *ctx) {
-    // First param is socket, not skb
-    return 0;
-}
-
-int kprobe__tcp_write_xmit(struct pt_regs *ctx) {
-    // First param is socket, not skb
-    return 0;
-}
-
 int kprobe__tcp_transmit_skb(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM2(ctx);
     return trace_network_function(ctx, skb);
@@ -511,38 +360,7 @@ int kprobe__udp_send_skb(struct pt_regs *ctx) {
     return trace_network_function(ctx, skb);
 }
 
-int kprobe__ip_route_output_flow(struct pt_regs *ctx) {
-    // Routing function, no skb
-    return 0;
-}
-
-int kprobe__ip_route_output_key_hash(struct pt_regs *ctx) {
-    // Routing function, no skb
-    return 0;
-}
-
-// ==============================================
-// TC EGRESS LAYER
-// ==============================================
-int kprobe__sch_handle_egress(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
-    return trace_network_function(ctx, skb);
-}
-
-// ==============================================
-// NIC TX LAYER
-// ==============================================
-int kprobe__ixgbe_xmit_frame(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
-    return trace_network_function(ctx, skb);
-}
-
-int kprobe__e1000_xmit_frame(struct pt_regs *ctx) {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
-    return trace_network_function(ctx, skb);
-}
-
-int kprobe__mlx5e_xmit(struct pt_regs *ctx) {
+int kprobe__ip_output(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM2(ctx);
     return trace_network_function(ctx, skb);
 }
