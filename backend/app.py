@@ -77,6 +77,15 @@ NFT_TRACER_PATH = os.path.join(os.path.dirname(__file__), "ebpf", "nft_tracer.bp
 FULL_TRACER_PATH = os.path.join(os.path.dirname(__file__), "ebpf", "full_tracer.bpf.c")
 MULTIFUNCTION_TRACER_PATH = os.path.join(os.path.dirname(__file__), "ebpf", "multi_function_nft_trace_v2.bpf.c")
 FUNCTIONS_CACHE = os.path.join(os.path.dirname(__file__), "data", "cache", "skb_functions.json")
+
+# Exclude packets from/to application ports to avoid self-tracing
+# This prevents logging packets between frontend <-> backend
+# Can be configured via environment variables
+EXCLUDED_PORTS = set([
+    int(os.environ.get('BACKEND_PORT', 5000)),  # Flask backend
+    int(os.environ.get('FRONTEND_PORT', 3000)), # React frontend
+    int(os.environ.get('SOCKETIO_PORT', 5001)), # SocketIO test server (if used)
+])
 TRACE_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "data", "cache", "trace_config.json")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -650,7 +659,10 @@ class PacketTrace:
         """
         Determine if a trace is valuable enough to be logged/exported.
 
-        A trace is considered valuable if it meets ANY of these criteria:
+        EXCLUSION CRITERIA (always filtered):
+        - Packets from/to application ports (frontend/backend self-tracing)
+
+        VALUE CRITERIA (trace is kept if it meets ANY):
         1. Has complete packet info (protocol, IPs, ports)
         2. Has multiple events (>= 2) showing actual packet processing
         3. Has NFT rule evaluation (indicates firewall interaction)
@@ -661,7 +673,13 @@ class PacketTrace:
         - Single-function traces with no packet metadata
         - Incomplete traces from non-IPv4 packets
         - Driver-level traces that don't show full processing
+        - Self-tracing packets (frontend <-> backend communication)
         """
+        # EXCLUSION: Filter out self-tracing packets (frontend <-> backend)
+        # This prevents logging the application's own HTTP/WebSocket traffic
+        if self.src_port in EXCLUDED_PORTS or self.dst_port in EXCLUDED_PORTS:
+            return False
+
         # Criterion 1: Has complete packet info
         has_complete_info = (
             self.protocol is not None and
@@ -973,8 +991,9 @@ class TraceSession:
         self.stats_by_verdict = defaultdict(int)
 
         self.trace_timeout_ns = 5 * 1_000_000_000
-        
+
         print(f"[DEBUG] Session {session_id} created in {mode.upper()} mode")
+        print(f"[DEBUG] Excluded ports (no self-tracing): {sorted(EXCLUDED_PORTS)}")
     
     def start(self) -> bool:
         if not BCC_AVAILABLE:
@@ -1712,6 +1731,7 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                 'end_time': self.end_time.isoformat() if self.end_time else None,
                 'duration_seconds': (self.end_time - self.start_time).total_seconds() if self.end_time else 0,
                 'hostname': self.hostname, 'kernel_version': self.kernel_version,
+                'excluded_ports': list(EXCLUDED_PORTS),  # Show which ports are excluded
             },
             'statistics': {
                 'total_events': self.total_events,
