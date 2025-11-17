@@ -293,6 +293,97 @@ def detect_packet_direction_new(func_name: str, layer: str, hook: int) -> str:
 # ============================================
 
 @dataclass
+class NodeStats:
+    """Statistics for a pipeline node (e.g., NIC, Netfilter PREROUTING, etc.)"""
+    count: int = 0
+    unique_skbs: set = field(default_factory=set)
+    latencies_us: List[float] = field(default_factory=list)  # microseconds
+    function_calls: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    verdict_breakdown: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    error_count: int = 0
+    drop_count: int = 0
+    truncated_count: int = 0
+    first_ts: Optional[float] = None
+    last_ts: Optional[float] = None
+
+    def add_event(self, skb_addr: str, latency_us: float = 0, function: str = None,
+                  verdict: str = None, error: bool = False):
+        """Add an event to this node's statistics"""
+        self.count += 1
+        self.unique_skbs.add(skb_addr)
+        if latency_us > 0:
+            self.latencies_us.append(latency_us)
+        if function:
+            self.function_calls[function] += 1
+        if verdict:
+            self.verdict_breakdown[verdict] += 1
+            if verdict == 'DROP':
+                self.drop_count += 1
+        if error:
+            self.error_count += 1
+
+    def get_latency_percentiles(self) -> Dict[str, float]:
+        """Calculate latency percentiles"""
+        if not self.latencies_us:
+            return {'p50': 0, 'p90': 0, 'p99': 0, 'avg': 0}
+
+        import numpy as np
+        latencies = np.array(self.latencies_us)
+        return {
+            'p50': float(np.percentile(latencies, 50)),
+            'p90': float(np.percentile(latencies, 90)),
+            'p99': float(np.percentile(latencies, 99)),
+            'avg': float(np.mean(latencies))
+        }
+
+    def get_top_functions(self, limit: int = 3) -> List[Dict]:
+        """Get top N functions with count and percentage"""
+        if not self.function_calls:
+            return []
+
+        total = sum(self.function_calls.values())
+        top_funcs = sorted(self.function_calls.items(), key=lambda x: x[1], reverse=True)[:limit]
+
+        return [
+            {
+                'name': func,
+                'count': count,
+                'pct': round((count / total) * 100, 1) if total > 0 else 0
+            }
+            for func, count in top_funcs
+        ]
+
+    def to_dict(self) -> Dict:
+        """Convert to dict for JSON serialization"""
+        latency = self.get_latency_percentiles()
+        verdict_dict = dict(self.verdict_breakdown) if self.verdict_breakdown else None
+
+        return {
+            'count': self.count,
+            'unique_packets': len(self.unique_skbs),
+            'latency': latency,
+            'top_functions': self.get_top_functions(3),
+            'verdict': verdict_dict,
+            'errors': self.error_count,
+            'drops': self.drop_count,
+            'truncated': self.truncated_count
+        }
+
+@dataclass
+class EdgeStats:
+    """Statistics for traffic flow between two nodes"""
+    from_node: str
+    to_node: str
+    count: int = 0
+
+    def to_dict(self) -> Dict:
+        return {
+            'from': self.from_node,
+            'to': self.to_node,
+            'count': self.count
+        }
+
+@dataclass
 class PacketEvent:
     """Single packet event from eBPF"""
     timestamp: float
@@ -425,11 +516,29 @@ class RealtimeStats:
             'Inbound': defaultdict(int),
             'Outbound': defaultdict(int)
         }
+
+        # ENHANCED: Node-based statistics with detailed metrics
+        self.nodes: Dict[str, NodeStats] = {}  # node_name -> NodeStats
+        self.edges: Dict[tuple, EdgeStats] = {}  # (from, to) -> EdgeStats
+        self.skb_paths: Dict[str, List[str]] = {}  # skb_addr -> [node1, node2, ...]
     
     def get_hook(self, hook_name: str) -> HookStats:
         if hook_name not in self.hooks:
             self.hooks[hook_name] = HookStats()
         return self.hooks[hook_name]
+
+    def get_node(self, node_name: str) -> NodeStats:
+        """Get or create a node's statistics"""
+        if node_name not in self.nodes:
+            self.nodes[node_name] = NodeStats()
+        return self.nodes[node_name]
+
+    def add_edge(self, from_node: str, to_node: str):
+        """Track an edge (transition) between two nodes"""
+        edge_key = (from_node, to_node)
+        if edge_key not in self.edges:
+            self.edges[edge_key] = EdgeStats(from_node=from_node, to_node=to_node)
+        self.edges[edge_key].count += 1
     
     def _detect_direction(self, hook_name: str, layer_name: str, function: str, hook: int) -> str:
         """Detect packet direction (Inbound or Outbound) using new pipeline mapping"""
@@ -534,6 +643,44 @@ class RealtimeStats:
             direction = self._detect_direction(hook_name, layer_name, event.function or '', hook)
             pipeline_layer = self._map_to_pipeline_layer(layer_name, event.function or '', hook)
             self.stats_by_direction_layer[direction][pipeline_layer] += 1
+
+            # ENHANCED: Track detailed node statistics
+            node = self.get_node(pipeline_layer)
+
+            # Calculate latency in microseconds
+            latency_us = 0.0
+            if event.skb_addr and event.skb_addr in self.skb_tracking:
+                first_ts = self.skb_tracking[event.skb_addr]['first_ts']
+                latency_us = (event.timestamp - first_ts) * 1_000_000  # convert to microseconds
+
+            # Add event to node
+            node.add_event(
+                skb_addr=event.skb_addr or '',
+                latency_us=latency_us,
+                function=event.function,
+                verdict=event.verdict_name,
+                error=(event.error_code > 0)
+            )
+
+            # Track edges (transitions between nodes)
+            if event.skb_addr:
+                if event.skb_addr not in self.skb_paths:
+                    self.skb_paths[event.skb_addr] = []
+
+                # If there's a previous node, create an edge
+                if self.skb_paths[event.skb_addr]:
+                    prev_node = self.skb_paths[event.skb_addr][-1]
+                    if prev_node != pipeline_layer:  # Avoid self-loops
+                        self.add_edge(prev_node, pipeline_layer)
+
+                # Add current node to path
+                self.skb_paths[event.skb_addr].append(pipeline_layer)
+
+                # Limit path history
+                if len(self.skb_paths) > 10000:
+                    oldest_keys = list(self.skb_paths.keys())[:1000]
+                    for key in oldest_keys:
+                        del self.skb_paths[key]
             
             # Accept event even if layer not in strict map - this helps capture more data
             # We'll validate layer presence in HOOK_LAYER_MAP but still process
@@ -608,6 +755,15 @@ class RealtimeStats:
                 if hook_name not in HOOK_ORDER:
                     hooks_data[hook_name] = hook_stats.to_dict()
 
+            # ENHANCED: Serialize nodes and edges
+            nodes_data = {}
+            for node_name, node_stats in self.nodes.items():
+                nodes_data[node_name] = node_stats.to_dict()
+
+            edges_data = []
+            for edge_stats in self.edges.values():
+                edges_data.append(edge_stats.to_dict())
+
             return {
                 'total_packets': self.total_packets,
                 'uptime_seconds': round(uptime, 2),
@@ -618,7 +774,10 @@ class RealtimeStats:
                 'stats': {
                     'Inbound': dict(self.stats_by_direction_layer['Inbound']),
                     'Outbound': dict(self.stats_by_direction_layer['Outbound'])
-                }
+                },
+                # ENHANCED: Detailed node and edge statistics
+                'nodes': nodes_data,
+                'edges': edges_data
             }
     
     def reset(self):
@@ -634,6 +793,10 @@ class RealtimeStats:
                 'Inbound': defaultdict(int),
                 'Outbound': defaultdict(int)
             }
+            # ENHANCED: Reset nodes and edges
+            self.nodes.clear()
+            self.edges.clear()
+            self.skb_paths.clear()
 
 # ============================================
 # HELPER FUNCTIONS
