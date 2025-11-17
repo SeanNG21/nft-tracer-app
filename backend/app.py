@@ -595,6 +595,22 @@ class PacketTrace:
 
             self._last_expr_eval = (dedup_key, event.timestamp)
 
+        # FIX: Skip ACCEPT chain_exit events to reduce log noise
+        # ACCEPT just means "continue to next hook", not interesting
+        # Only log terminal verdicts (DROP, STOLEN) which actually end packet lifecycle
+        if event.trace_type == 0 and event.verdict == 1:  # chain_exit + ACCEPT
+            # Still update last_seen and packet info, but don't add to events list
+            self.last_seen = event.timestamp
+            if event.protocol > 0 and self.protocol is None:
+                self.protocol = event.protocol
+                self.src_ip = self._format_ip(event.src_ip)
+                self.dst_ip = self._format_ip(event.dst_ip)
+                self.src_port = event.src_port if event.src_port > 0 else None
+                self.dst_port = event.dst_port if event.dst_port > 0 else None
+            if event.hook != 255 and self.hook is None:
+                self.hook = event.hook
+            return  # Skip adding to events list
+
         event_dict = {
             'timestamp': event.timestamp,
             'trace_type': self._trace_type_str(event.trace_type),
