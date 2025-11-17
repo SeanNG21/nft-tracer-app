@@ -1842,22 +1842,22 @@ class RealtimeExtension:
                     self._session_not_found_logged.add(session_id)
     
     def _emit_session_stats_loop(self):
-        """Background thread to emit session stats every 0.5 seconds to reduce sample loss"""
-        print(f"[DEBUG] _emit_session_stats_loop started (0.5s interval)")
+        """Background thread to emit session stats every 2 seconds to prevent feedback loop amplification"""
+        print(f"[DEBUG] _emit_session_stats_loop started (2s interval)")
         iteration = 0
         while self._session_stats_running:
-            time.sleep(0.5)  # Changed from 1s to 0.5s for batching
+            time.sleep(2.0)  # Increased from 0.5s to 2s to reduce loop amplification
             iteration += 1
 
             with self.session_lock:
-                if iteration <= 6:  # Debug first 6 iterations (3 seconds worth)
+                if iteration <= 3:  # Debug first 3 iterations (6 seconds worth)
                     print(f"[DEBUG] Emit iteration #{iteration}, active sessions: {list(self.session_trackers.keys())}")
 
                 for session_id, tracker in list(self.session_trackers.items()):
                     try:
                         stats = tracker.get_stats()
 
-                        if iteration <= 6:  # Debug first 6 iterations
+                        if iteration <= 3:  # Debug first 3 iterations (6 seconds worth)
                             print(f"[DEBUG] Emitting stats for {session_id}: total_events={stats['total_events']}, total_packets={stats['total_packets']}")
 
                         # Emit to session-specific room

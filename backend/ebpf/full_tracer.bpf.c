@@ -120,80 +120,87 @@ static __always_inline u64 extract_rule_handle(void *expr)
 }
 
 // Helper: extract packet info from sk_buff
-static __always_inline void extract_packet_info_from_skb(void *skb, struct trace_event *evt)
+// Returns 1 if extraction succeeded, 0 if failed (NULL packet info)
+static __always_inline int extract_packet_info_from_skb(void *skb, struct trace_event *evt)
 {
     if (!skb)
-        return;
-    
+        return 0;
+
     evt->skb_addr = (u64)skb;
-    
+
     // Get length
     u32 len = 0;
     bpf_probe_read_kernel(&len, sizeof(len), (char *)skb + 0x88);
     evt->length = len;
-    
+
     // Get IP header pointer
     void *ip_header = NULL;
     bpf_probe_read_kernel(&ip_header, sizeof(ip_header), (char *)skb + 0xd0);
-    
+
     if (!ip_header)
-        return;
-    
+        return 0;  // FAILED - no IP header available
+
     u8 ihl_version = 0;
     u8 protocol = 0;
     u32 saddr = 0;
     u32 daddr = 0;
-    
+
     bpf_probe_read_kernel(&ihl_version, sizeof(ihl_version), ip_header);
     u8 version = (ihl_version >> 4) & 0x0F;
-    
+
     if (version != 4)
-        return;
-    
+        return 0;  // FAILED - not IPv4
+
     bpf_probe_read_kernel(&protocol, sizeof(protocol), (char *)ip_header + 9);
     bpf_probe_read_kernel(&saddr, sizeof(saddr), (char *)ip_header + 12);
     bpf_probe_read_kernel(&daddr, sizeof(daddr), (char *)ip_header + 16);
-    
+
     evt->protocol = protocol;
     evt->src_ip = saddr;
     evt->dst_ip = daddr;
-    
+
     // Extract ports
     if (protocol == 6 || protocol == 17) {
         u8 ihl = (ihl_version & 0x0F) * 4;
         void *trans_header = (char *)ip_header + ihl;
-        
+
         u16 sport = 0;
         u16 dport = 0;
-        
+
         bpf_probe_read_kernel(&sport, sizeof(sport), trans_header);
         bpf_probe_read_kernel(&dport, sizeof(dport), (char *)trans_header + 2);
-        
+
         evt->src_port = bpf_ntohs(sport);
         evt->dst_port = bpf_ntohs(dport);
     }
+
+    return 1;  // SUCCESS
 }
 
 // Helper: extract packet info from nft_pktinfo
-static __always_inline void extract_packet_info_from_pkt(void *pkt, struct trace_event *evt)
+// Returns 1 if extraction succeeded, 0 if failed (NULL packet info)
+static __always_inline int extract_packet_info_from_pkt(void *pkt, struct trace_event *evt)
 {
     if (!pkt)
-        return;
-    
+        return 0;
+
     void *skb = NULL;
     void *state = NULL;
-    
+
     bpf_probe_read_kernel(&skb, sizeof(skb), pkt);
     bpf_probe_read_kernel(&state, sizeof(state), (char *)pkt + 8);
-    
+
+    int success = 0;
     if (skb) {
-        extract_packet_info_from_skb(skb, evt);
+        success = extract_packet_info_from_skb(skb, evt);
     }
-    
+
     if (state) {
         bpf_probe_read_kernel(&evt->hook, sizeof(evt->hook), state);
         bpf_probe_read_kernel(&evt->pf, sizeof(evt->pf), (char *)state + 1);
     }
+
+    return success;
 }
 
 // ==============================================
@@ -212,7 +219,12 @@ int trace_skb_func(struct pt_regs *ctx, struct sk_buff *skb)
     // CRITICAL: Get function IP for name lookup in userspace
     evt.func_ip = PT_REGS_IP(ctx);
 
-    extract_packet_info_from_skb(skb, &evt);
+    // Extract packet info - if it fails (NULL packet info), skip this event
+    int extraction_success = extract_packet_info_from_skb(skb, &evt);
+    if (!extraction_success) {
+        return 0;  // FILTER: Skip events with NULL packet info (no IP header available)
+    }
+
     read_comm_safe(evt.comm, sizeof(evt.comm));
 
     // FILTER: Skip packets from/to app ports (3000=frontend, 5000=backend) to avoid loops
@@ -258,7 +270,19 @@ int kprobe__nft_do_chain(struct pt_regs *ctx)
     evt.chain_addr = (u64)priv;
     evt.chain_depth = depth;
 
-    extract_packet_info_from_pkt(pkt, &evt);
+    // Extract packet info - if it fails, cleanup and skip this event
+    int extraction_success = extract_packet_info_from_pkt(pkt, &evt);
+    if (!extraction_success) {
+        // Cleanup depth map before returning
+        if (cur_depth && *cur_depth > 0) {
+            u8 new_depth = *cur_depth - 1;
+            depth_map.update(&tid, &new_depth);
+        } else {
+            depth_map.delete(&tid);
+        }
+        return 0;  // FILTER: Skip events with NULL packet info
+    }
+
     read_comm_safe(evt.comm, sizeof(evt.comm));
 
     // FILTER: Skip packets from/to app ports (3000=frontend, 5000=backend) to avoid loops

@@ -1496,20 +1496,22 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                 trace.add_universal_event(universal_event, hook=hook_value)
 
                 # === REALTIME: Send function event (ALWAYS for session tracking) ===
+                # FILTER: Skip self-tracing packets (app ports 3000, 5000) to prevent feedback loop
                 if REALTIME_AVAILABLE and realtime:
-                    try:
-                        realtime.process_session_event({
-                            'hook': event.hook,
-                            'func_name': func_name,
-                            'verdict': event.verdict,
-                            'protocol': event.protocol,
-                            'src_ip': trace._format_ip(event.src_ip),
-                            'dst_ip': trace._format_ip(event.dst_ip),
-                            'timestamp': time.time()
-                        }, self.session_id)
-                    except Exception as e:
-                        # Silent fail - don't break session if realtime fails
-                        pass
+                    if not (event.src_port in (3000, 5000) or event.dst_port in (3000, 5000)):
+                        try:
+                            realtime.process_session_event({
+                                'hook': event.hook,
+                                'func_name': func_name,
+                                'verdict': event.verdict,
+                                'protocol': event.protocol,
+                                'src_ip': trace._format_ip(event.src_ip),
+                                'dst_ip': trace._format_ip(event.dst_ip),
+                                'timestamp': time.time()
+                            }, self.session_id)
+                        except Exception as e:
+                            # Silent fail - don't break session if realtime fails
+                            pass
             
             elif event.event_type in [1, 2, 3]:  # NFT events
                 nft_event = NFTEvent(
@@ -1529,20 +1531,22 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                 trace.add_nft_event(nft_event)
 
                 # === REALTIME: Send NFT verdict event (ALWAYS for session tracking) ===
+                # FILTER: Skip self-tracing packets (app ports 3000, 5000) to prevent feedback loop
                 if REALTIME_AVAILABLE and realtime:
-                    try:
-                        realtime.process_session_event({
-                            'hook': event.hook,
-                            'func_name': 'nft_do_chain',
-                            'verdict': event.verdict,
-                            'protocol': event.protocol,
-                            'src_ip': trace._format_ip(event.src_ip),
-                            'dst_ip': trace._format_ip(event.dst_ip),
-                            'timestamp': time.time()
-                        }, self.session_id)
-                    except Exception as e:
-                        # Silent fail - don't break session if realtime fails
-                        pass
+                    if not (event.src_port in (3000, 5000) or event.dst_port in (3000, 5000)):
+                        try:
+                            realtime.process_session_event({
+                                'hook': event.hook,
+                                'func_name': 'nft_do_chain',
+                                'verdict': event.verdict,
+                                'protocol': event.protocol,
+                                'src_ip': trace._format_ip(event.src_ip),
+                                'dst_ip': trace._format_ip(event.dst_ip),
+                                'timestamp': time.time()
+                            }, self.session_id)
+                        except Exception as e:
+                            # Silent fail - don't break session if realtime fails
+                            pass
                 
                 if event.event_type == 1 and event.verdict in [0, 1]:
                     if skb_addr in self.packet_traces:
@@ -1627,20 +1631,22 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
             self.events_by_func[func_name] += 1
 
             # === REALTIME: Send event for session tracking ===
+            # FILTER: Skip self-tracing packets (app ports 3000, 5000) to prevent feedback loop
             if REALTIME_AVAILABLE and realtime:
-                try:
-                    realtime.process_session_event({
-                        'event_type': 'multifunction',
-                        'func_name': func_name,
-                        'layer': layer,
-                        'hook': event.hook,
-                        'verdict': event.verdict,
-                        'protocol': event.protocol,
-                        'timestamp': time.time()
-                    }, self.session_id)
-                except Exception as e:
-                    # Silent fail - don't break session if realtime fails
-                    pass
+                if not (event.src_port in (3000, 5000) or event.dst_port in (3000, 5000)):
+                    try:
+                        realtime.process_session_event({
+                            'event_type': 'multifunction',
+                            'func_name': func_name,
+                            'layer': layer,
+                            'hook': event.hook,
+                            'verdict': event.verdict,
+                            'protocol': event.protocol,
+                            'timestamp': time.time()
+                        }, self.session_id)
+                    except Exception as e:
+                        # Silent fail - don't break session if realtime fails
+                        pass
 
             skb_addr = event.skb_addr if event.skb_addr != 0 else event.chain_addr
             if skb_addr == 0:

@@ -145,10 +145,11 @@ static __always_inline u64 extract_rule_handle(void *expr)
     return 0;
 }
 
-static __always_inline void extract_packet_info(struct sk_buff *skb, struct packet_info *pkt)
+// Returns 1 if extraction succeeded, 0 if failed (NULL packet info)
+static __always_inline int extract_packet_info(struct sk_buff *skb, struct packet_info *pkt)
 {
     if (!skb)
-        return;
+        return 0;
 
     pkt->skb_addr = (u64)skb;
 
@@ -160,14 +161,14 @@ static __always_inline void extract_packet_info(struct sk_buff *skb, struct pack
     bpf_probe_read_kernel(&ip_header, sizeof(ip_header), (char *)skb + 0xd0);
 
     if (!ip_header)
-        return;
+        return 0;  // FAILED - no IP header available
 
     u8 ihl_version = 0;
     bpf_probe_read_kernel(&ihl_version, sizeof(ihl_version), ip_header);
     u8 version = (ihl_version >> 4) & 0x0F;
 
     if (version != 4)
-        return;
+        return 0;  // FAILED - not IPv4
 
     u8 protocol = 0;
     u32 saddr = 0;
@@ -194,12 +195,15 @@ static __always_inline void extract_packet_info(struct sk_buff *skb, struct pack
         pkt->src_port = bpf_ntohs(sport);
         pkt->dst_port = bpf_ntohs(dport);
     }
+
+    return 1;  // SUCCESS
 }
 
-static __always_inline void extract_from_nft_pktinfo(void *pkt_ptr, struct packet_info *pkt)
+// Returns 1 if extraction succeeded, 0 if failed (NULL packet info)
+static __always_inline int extract_from_nft_pktinfo(void *pkt_ptr, struct packet_info *pkt)
 {
     if (!pkt_ptr)
-        return;
+        return 0;
 
     void *skb = NULL;
     void *state = NULL;
@@ -207,14 +211,17 @@ static __always_inline void extract_from_nft_pktinfo(void *pkt_ptr, struct packe
     bpf_probe_read_kernel(&skb, sizeof(skb), pkt_ptr);
     bpf_probe_read_kernel(&state, sizeof(state), (char *)pkt_ptr + 8);
 
+    int success = 0;
     if (skb) {
-        extract_packet_info((struct sk_buff *)skb, pkt);
+        success = extract_packet_info((struct sk_buff *)skb, pkt);
     }
 
     if (state) {
         bpf_probe_read_kernel(&pkt->hook, sizeof(pkt->hook), state);
         bpf_probe_read_kernel(&pkt->pf, sizeof(pkt->pf), (char *)state + 1);
     }
+
+    return success;
 }
 
 // Helper to copy string safely
@@ -252,7 +259,13 @@ static __always_inline int trace_skb_generic(struct pt_regs *ctx, struct sk_buff
         new_pkt.skb_addr = skb_addr;
         new_pkt.first_seen = bpf_ktime_get_ns();
         new_pkt.function_count = 0;
-        extract_packet_info(skb, &new_pkt);
+
+        // Extract packet info - if it fails, skip this event
+        int extraction_success = extract_packet_info(skb, &new_pkt);
+        if (!extraction_success) {
+            return 0;  // FILTER: Skip events with NULL packet info (no IP header available)
+        }
+
         packet_map.update(&skb_addr, &new_pkt);
         pkt = &new_pkt;
     }
@@ -319,7 +332,19 @@ int kprobe__nft_do_chain(struct pt_regs *ctx)
     struct packet_info new_pkt = {};
 
     if (!pkt) {
-        extract_from_nft_pktinfo(pkt_ptr, &new_pkt);
+        // Extract packet info - if it fails, cleanup and skip this event
+        int extraction_success = extract_from_nft_pktinfo(pkt_ptr, &new_pkt);
+        if (!extraction_success) {
+            // Cleanup depth map before returning
+            if (cur_depth && *cur_depth > 0) {
+                u8 new_depth = *cur_depth - 1;
+                depth_map.update(&tid, &new_depth);
+            } else {
+                depth_map.delete(&tid);
+            }
+            return 0;  // FILTER: Skip events with NULL packet info
+        }
+
         new_pkt.chain_addr = (u64)priv;
         new_pkt.chain_depth = depth;
         new_pkt.rule_seq = 0;
@@ -516,7 +541,13 @@ int kprobe__nf_hook_slow(struct pt_regs *ctx)
         new_pkt.skb_addr = skb_addr;
         new_pkt.first_seen = bpf_ktime_get_ns();
         new_pkt.function_count = 0;
-        extract_packet_info((struct sk_buff *)skb, &new_pkt);
+
+        // Extract packet info - if it fails, skip this event
+        int extraction_success = extract_packet_info((struct sk_buff *)skb, &new_pkt);
+        if (!extraction_success) {
+            return 0;  // FILTER: Skip events with NULL packet info (no IP header available)
+        }
+
         pkt = &new_pkt;
     }
 
