@@ -131,50 +131,66 @@ static __always_inline void extract_packet_info(void *pkt, struct skb_info *info
 {
     if (!pkt)
         return;
-    
+
     void *skb = NULL;
     bpf_probe_read_kernel(&skb, sizeof(skb), pkt);
     if (!skb)
         return;
-    
-    void *ip_header = NULL;
-    bpf_probe_read_kernel(&ip_header, sizeof(ip_header), (char *)skb + 0xd0);
-    
-    if (!ip_header)
+
+    // Read sk_buff header pointers properly
+    // skb->head is at offset ~0xd0 (kernel 5.x)
+    void *head = NULL;
+    bpf_probe_read_kernel(&head, sizeof(head), (char *)skb + 0xd0);
+
+    if (!head)
         return;
-    
+
+    // skb->network_header is at offset ~0xb0 (u16)
+    u16 network_header_offset = 0;
+    bpf_probe_read_kernel(&network_header_offset, sizeof(network_header_offset),
+                          (char *)skb + 0xb0);
+
+    // Calculate actual IP header address: head + network_header_offset
+    void *ip_header = (char *)head + network_header_offset;
+
     u8 ihl_version = 0;
     u8 protocol = 0;
     u32 saddr = 0;
     u32 daddr = 0;
-    
+
     bpf_probe_read_kernel(&ihl_version, sizeof(ihl_version), ip_header);
     u8 version = (ihl_version >> 4) & 0x0F;
-    
+
     if (version != 4)
         return;
-    
+
     bpf_probe_read_kernel(&protocol, sizeof(protocol), (char *)ip_header + 9);
     bpf_probe_read_kernel(&saddr, sizeof(saddr), (char *)ip_header + 12);
     bpf_probe_read_kernel(&daddr, sizeof(daddr), (char *)ip_header + 16);
-    
+
     if (protocol == 0 || protocol > 150)
         return;
-    
+
     info->protocol = protocol;
     info->src_ip = saddr;
     info->dst_ip = daddr;
-    
+
     if (protocol == 6 || protocol == 17) {
-        u8 ihl = (ihl_version & 0x0F) * 4;
-        void *trans_header = (char *)ip_header + ihl;
-        
+        // Read transport_header offset directly from sk_buff
+        // skb->transport_header is at offset ~0xb2 (u16)
+        u16 transport_header_offset = 0;
+        bpf_probe_read_kernel(&transport_header_offset, sizeof(transport_header_offset),
+                              (char *)skb + 0xb2);
+
+        // Calculate actual transport header address: head + transport_header_offset
+        void *trans_header = (char *)head + transport_header_offset;
+
         u16 sport = 0;
         u16 dport = 0;
-        
+
         bpf_probe_read_kernel(&sport, sizeof(sport), trans_header);
         bpf_probe_read_kernel(&dport, sizeof(dport), (char *)trans_header + 2);
-        
+
         info->src_port = bpf_ntohs(sport);
         info->dst_port = bpf_ntohs(dport);
     }
