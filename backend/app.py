@@ -748,6 +748,7 @@ class PacketTrace:
 
                 elif trace_type in ['chain_exit', 'rule_eval', 'hook_exit']:
                     # Include NFT events with essential verdict information
+                    # Note: expr_addr and chain_addr are already hex strings from add_nft_event()
                     nft_events.append({
                         'timestamp': event['timestamp'],
                         'trace_type': trace_type,
@@ -756,8 +757,8 @@ class PacketTrace:
                         'verdict_raw': event.get('verdict_raw', 0),
                         'rule_seq': event.get('rule_seq', 0),
                         'rule_handle': event.get('rule_handle', 0),
-                        'expr_addr': hex(event['expr_addr']) if event.get('expr_addr') else None,
-                        'chain_addr': hex(event['chain_addr']) if event.get('chain_addr') else None,
+                        'expr_addr': event.get('expr_addr'),  # Already hex string or None
+                        'chain_addr': event.get('chain_addr'),  # Already hex string or None
                         'chain_depth': event.get('chain_depth', 0),
                         'cpu_id': event['cpu_id'],
                         'comm': event['comm'],
