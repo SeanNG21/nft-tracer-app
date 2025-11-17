@@ -1346,7 +1346,7 @@ def handle_stats_request():
 
 class SessionStatsTracker:
     """Track realtime stats for a specific trace session"""
-    
+
     def __init__(self, session_id: str, mode: str):
         self.session_id = session_id
         self.mode = mode
@@ -1375,6 +1375,15 @@ class SessionStatsTracker:
             })
         })
 
+        # ENHANCED: Node-based statistics for full mode (enhanced pipeline visualization)
+        self.nodes: Dict[str, NodeStats] = {}  # node_name -> NodeStats
+        self.skb_tracking: Dict[str, Dict] = {}  # skb_addr -> {'first_ts': float, 'last_node': str}
+        self.skb_paths: Dict[str, List[str]] = {}  # skb_addr -> [node1, node2, ...]
+        self.stats_by_direction_layer = {
+            'Inbound': defaultdict(int),
+            'Outbound': defaultdict(int)
+        }
+
         # Multifunction-specific stats
         self.stats_by_layer = defaultdict(int)
         self.stats_by_hook = defaultdict(int)
@@ -1385,6 +1394,12 @@ class SessionStatsTracker:
 
         # Lock for thread safety
         self.lock = threading.Lock()
+
+    def get_node(self, node_name: str) -> NodeStats:
+        """Get or create a node's statistics"""
+        if node_name not in self.nodes:
+            self.nodes[node_name] = NodeStats()
+        return self.nodes[node_name]
     
     def process_event(self, event: Dict):
         """Process a single event"""
@@ -1465,9 +1480,111 @@ class SessionStatsTracker:
                     'timestamp': time.time()
                 })
 
+            # ENHANCED: Track pipeline nodes for full mode (for enhanced visualization)
+            if self.mode == 'full':
+                # Map to pipeline layer
+                pipeline_layer = self._map_to_pipeline_layer(layer_name, func_name, hook_num)
+
+                # Detect direction
+                direction = self._detect_direction(hook_name, layer_name, func_name, hook_num)
+
+                # Update direction stats
+                self.stats_by_direction_layer[direction][pipeline_layer] += 1
+
+                # Get or create node
+                node = self.get_node(pipeline_layer)
+
+                # Track SKB and calculate latency
+                skb_addr = event.get('skb_addr', '')
+                timestamp = event.get('timestamp', time.time())
+                latency_us = 0.0
+
+                if skb_addr:
+                    if skb_addr not in self.skb_tracking:
+                        self.skb_tracking[skb_addr] = {
+                            'first_ts': timestamp,
+                            'last_node': pipeline_layer
+                        }
+                    else:
+                        first_ts = self.skb_tracking[skb_addr]['first_ts']
+                        latency_us = (timestamp - first_ts) * 1_000_000  # microseconds
+                        self.skb_tracking[skb_addr]['last_node'] = pipeline_layer
+
+                    # Limit tracking to prevent memory bloat
+                    if len(self.skb_tracking) > 10000:
+                        # Remove oldest 1000 entries
+                        oldest_keys = list(self.skb_tracking.keys())[:1000]
+                        for key in oldest_keys:
+                            del self.skb_tracking[key]
+
+                # Add event to node
+                node.add_event(
+                    skb_addr=skb_addr,
+                    latency_us=latency_us,
+                    function=func_name,
+                    verdict=verdict_name,
+                    error=(event.get('error_code', 0) > 0)
+                )
+
             # Update total packets (count unique packets, not events)
             self.total_packets = max(self.total_packets, sum(h['packets_total'] for h in self.hooks.values()) // max(len(self.hooks), 1))
     
+    def _detect_direction(self, hook_name: str, layer_name: str, function: str, hook: int) -> str:
+        """Detect packet direction (Inbound or Outbound)"""
+        # First try to use function-based detection
+        if function and function in FUNCTION_TO_LAYER:
+            base_layer = FUNCTION_TO_LAYER[function]
+            refined_layer = refine_layer_by_hook(function, base_layer, hook)
+            return detect_packet_direction_new(function, refined_layer, hook)
+
+        # Fallback to hook-based detection
+        if hook_name in ['PRE_ROUTING', 'LOCAL_IN', 'FORWARD']:
+            return 'Inbound'
+        elif hook_name in ['LOCAL_OUT', 'POST_ROUTING']:
+            return 'Outbound'
+
+        # Layer-based fallback
+        if layer_name in ['Ingress', 'L2']:
+            return 'Inbound'
+        elif layer_name == 'Egress':
+            return 'Outbound'
+
+        return 'Inbound'  # Default
+
+    def _map_to_pipeline_layer(self, layer_name: str, function: str, hook: int) -> str:
+        """Map function to pipeline layer name using FUNCTION_TO_LAYER"""
+        # First priority: Use FUNCTION_TO_LAYER mapping
+        if function and function in FUNCTION_TO_LAYER:
+            base_layer = FUNCTION_TO_LAYER[function]
+            # Refine by hook if needed
+            refined_layer = refine_layer_by_hook(function, base_layer, hook)
+            return refined_layer
+
+        # Fallback: Old layer name mappings
+        layer_map = {
+            'Ingress': 'NIC',
+            'L2': 'Driver (NAPI)',
+            'IP': 'Routing Decision',
+            'Firewall': 'Netfilter',
+            'Socket': 'TCP/UDP',
+            'Egress': 'Driver TX'
+        }
+
+        if layer_name in layer_map:
+            return layer_map[layer_name]
+
+        # Function-based heuristics
+        if function:
+            func_lower = function.lower()
+            if 'napi' in func_lower:
+                return 'Driver (NAPI)'
+            elif 'gro' in func_lower:
+                return 'GRO'
+            elif 'tc' in func_lower:
+                return 'TC Ingress' if 'ingress' in func_lower else 'TC Egress'
+
+        return layer_name or 'Unknown'
+
     def _map_multifunction_layer(self, bpf_layer: str, hook_name: str) -> str:
         """Map BPF layer names to frontend layer names"""
         # Mapping from BPF trace_config.json layers to frontend LAYER_MAP
@@ -1573,6 +1690,13 @@ class SessionStatsTracker:
             else:
                 # Only include recent_events for non-multifunction modes
                 stats['recent_events'] = list(self.recent_events)
+
+            # ENHANCED: Add nodes data for full mode (for enhanced pipeline visualization)
+            if self.mode == 'full':
+                nodes_data = {}
+                for node_name, node_stats in self.nodes.items():
+                    nodes_data[node_name] = node_stats.to_dict()
+                stats['nodes'] = nodes_data
 
             return stats
 
