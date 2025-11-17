@@ -84,9 +84,11 @@ class PacketTrace:
 class MultiFunctionNFTTracerV2:
     """V2 tracer with fixed symbol resolution"""
 
-    def __init__(self, config_file: str = None, max_functions: int = 50):
+    def __init__(self, config_file: str = None, max_functions: int = 50, verbose: bool = False, print_interval: int = 100):
         self.config_file = config_file
         self.max_functions = max_functions
+        self.verbose = verbose  # Print all events if True
+        self.print_interval = print_interval  # Print every N events
         self.bpf = None
         self.running = False
 
@@ -278,8 +280,15 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
 
             self.packet_traces[skb].add_event(evt)
 
-        # Print first 20 events
-        if self.total_events <= 20:
+        # Print events based on mode
+        if self.verbose:
+            # Verbose mode: print ALL events
+            self._print_event(evt)
+        elif self.total_events % self.print_interval == 0:
+            # Periodic mode: print every N events with summary
+            self._print_event_summary()
+        elif self.total_events <= 20:
+            # Initial mode: print first 20 events for quick feedback
             self._print_event(evt)
 
     def _print_event(self, evt):
@@ -294,6 +303,13 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
             verdict_str = f" [{VERDICT_NAMES.get(evt['verdict'], '???')}]"
 
         print(f"[{self.total_events:4d}] {event_type:10s} {layer:10s} {func:30s} {flow}{verdict_str}")
+
+    def _print_event_summary(self):
+        """Print periodic summary of events"""
+        print(f"\n[{self.total_events:6d} events] Packets: {self.stats['packets_seen']:4d} | "
+              f"Functions: {len(self.stats['functions_hit']):3d} | "
+              f"NFT Chains: {self.stats['nft_chains']:3d} | "
+              f"NFT Rules: {self.stats['nft_rules']:3d}")
 
     def poll(self, timeout: int = 100):
         if self.bpf and self.running:
@@ -398,6 +414,10 @@ def main():
     parser.add_argument('--max-functions', '-m', type=int, default=50)
     parser.add_argument('--duration', '-d', type=int, default=30)
     parser.add_argument('--discover', action='store_true', help='Run discovery first')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                       help='Print ALL events (default: first 20 + periodic summary)')
+    parser.add_argument('--print-interval', '-i', type=int, default=100,
+                       help='Print summary every N events (default: 100)')
 
     args = parser.parse_args()
 
@@ -421,7 +441,9 @@ def main():
 
     tracer = MultiFunctionNFTTracerV2(
         config_file=args.config,
-        max_functions=args.max_functions
+        max_functions=args.max_functions,
+        verbose=args.verbose,
+        print_interval=args.print_interval
     )
 
     tracer.load_functions()
