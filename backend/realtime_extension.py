@@ -864,11 +864,11 @@ class SessionStatsTracker:
         self.session_id = session_id
         self.mode = mode
         self.start_time = time.time()
-        
+
         # Overall stats
         self.total_packets = 0
         self.total_events = 0
-        
+
         # Hook-based stats: hook_name -> HookStats
         self.hooks = defaultdict(lambda: {
             'packets_total': 0,
@@ -887,10 +887,15 @@ class SessionStatsTracker:
                 'latency_count': 0
             })
         })
-        
+
+        # Multifunction-specific stats
+        self.stats_by_layer = defaultdict(int)
+        self.stats_by_hook = defaultdict(int)
+        self.stats_by_verdict = defaultdict(int)
+
         # Recent events (keep last 50)
         self.recent_events = deque(maxlen=50)
-        
+
         # Lock for thread safety
         self.lock = threading.Lock()
     
@@ -898,22 +903,40 @@ class SessionStatsTracker:
         """Process a single event"""
         with self.lock:
             self.total_events += 1
-            
+
             # Debug: Log first few events
             if self.total_events <= 5:
-                print(f"[SessionStats {self.session_id}] Event #{self.total_events}: hook={event.get('hook')}, func={event.get('func_name', 'N/A')}")
-            
+                print(f"[SessionStats {self.session_id}] Event #{self.total_events}: hook={event.get('hook')}, func={event.get('func_name', 'N/A')}, type={event.get('event_type', 'normal')}")
+
+            # Check if multifunction mode
+            is_multifunction = event.get('event_type') == 'multifunction'
+
             # Extract event info
-            hook_name = HOOK_MAP.get(event.get('hook', 255), 'UNKNOWN')
+            hook_num = event.get('hook', 255)
+            hook_name = HOOK_MAP.get(hook_num, 'UNKNOWN')
             func_name = event.get('func_name', '')
             verdict = event.get('verdict', 255)
             verdict_name = VERDICT_MAP.get(verdict, 'UNKNOWN')
             protocol = event.get('protocol', 0)
             src_ip = event.get('src_ip', '0.0.0.0')
             dst_ip = event.get('dst_ip', '0.0.0.0')
-            
+
             # Determine layer
-            layer_name = self._determine_layer(func_name, hook_name)
+            if is_multifunction and 'layer' in event:
+                layer_name = event['layer']  # Use layer from BPF metadata
+            else:
+                layer_name = self._determine_layer(func_name, hook_name)
+
+            # Multifunction-specific stats
+            if is_multifunction:
+                if layer_name and layer_name != 'Unknown':
+                    self.stats_by_layer[layer_name] += 1
+
+                if hook_num != 255:
+                    self.stats_by_hook[hook_name] += 1
+
+                if verdict != 255:
+                    self.stats_by_verdict[verdict_name] += 1
             
             # Update hook stats
             hook_stats = self.hooks[hook_name]
@@ -1001,7 +1024,7 @@ class SessionStatsTracker:
                     'layers': layers_dict
                 }
             
-            return {
+            stats = {
                 'session_id': self.session_id,
                 'mode': self.mode,
                 'total_packets': self.total_packets,
@@ -1011,6 +1034,14 @@ class SessionStatsTracker:
                 'hooks': hooks_dict,
                 'recent_events': list(self.recent_events)
             }
+
+            # Add multifunction-specific stats
+            if self.mode == 'multifunction':
+                stats['stats_by_layer'] = dict(self.stats_by_layer)
+                stats['stats_by_hook'] = dict(self.stats_by_hook)
+                stats['stats_by_verdict'] = dict(self.stats_by_verdict)
+
+            return stats
 
 class RealtimeExtension:
     """Wrapper class for integrating realtime tracer into main app"""

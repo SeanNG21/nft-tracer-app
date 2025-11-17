@@ -1145,6 +1145,22 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
             # Track function hits
             self.events_by_func[func_name] += 1
 
+            # === REALTIME: Send event for session tracking ===
+            if REALTIME_AVAILABLE and realtime:
+                try:
+                    realtime.process_session_event({
+                        'event_type': 'multifunction',
+                        'func_name': func_name,
+                        'layer': layer,
+                        'hook': event.hook,
+                        'verdict': event.verdict,
+                        'protocol': event.protocol,
+                        'timestamp': time.time()
+                    }, self.session_id)
+                except Exception as e:
+                    # Silent fail - don't break session if realtime fails
+                    pass
+
             skb_addr = event.skb_addr if event.skb_addr != 0 else event.chain_addr
             if skb_addr == 0:
                 return
