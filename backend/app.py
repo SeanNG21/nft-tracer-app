@@ -81,96 +81,144 @@ TRACE_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "data", "cache", "tr
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# FIXED_TRACE_FUNCTIONS: 40-50 representative functions across networking layers
-# Organized by layer and corresponding to netfilter hooks:
-#   - PREROUTING (hook 0): XDP, Driver RX, IP receive, early netfilter
-#   - INPUT (hook 1): Local delivery, transport layer receive
-#   - FORWARD (hook 2): IP forwarding path
-#   - OUTPUT (hook 3): Local generation, transport layer send
-#   - POSTROUTING (hook 4): Final output, driver TX
-FIXED_TRACE_FUNCTIONS = [
-    # === XDP Layer (2 functions) ===
-    'xdp_do_redirect',
-    'xdp_do_generic_redirect',
+# ============================================================================
+# 50 MOST CRITICAL NETWORKING FUNCTIONS - Organized by Layer and Pipeline
+# ============================================================================
 
-    # === Driver/Device Layer - RX Path (6 functions - PREROUTING) ===
-    'napi_gro_receive',
-    'netif_receive_skb',
-    '__netif_receive_skb_core',
-    'netif_receive_skb_internal',
-    'eth_type_trans',
-    'netif_receive_skb_list_internal',
+# Function → Layer mapping (50 critical functions organized by pipeline stage)
+FUNCTION_TO_LAYER = {
+    # === INBOUND PIPELINE ===
+    # NIC Layer
+    'napi_gro_receive': 'NIC',
+    'netif_receive_skb': 'NIC',
+    'netif_receive_skb_list_internal': 'NIC',
 
-    # === Driver/Device Layer - TX Path (4 functions - POSTROUTING) ===
-    'dev_queue_xmit',
-    '__dev_queue_xmit',
-    'dev_hard_start_xmit',
-    'sch_direct_xmit',
+    # Driver (NAPI)
+    'napi_poll': 'Driver (NAPI)',
+    'net_rx_action': 'Driver (NAPI)',
+    'process_backlog': 'Driver (NAPI)',
 
-    # === TC (Traffic Control) Layer (2 functions) ===
-    'dev_queue_xmit_nit',
-    'tcf_classify',
+    # GRO
+    'gro_normal_list': 'GRO',
+    'dev_gro_receive': 'GRO',
+    'skb_gro_receive': 'GRO',
 
-    # === IP Layer - RX/PREROUTING Path (5 functions - hook 0->1) ===
-    'ip_rcv',
-    'ip_rcv_core',
-    'ip_rcv_finish',
-    'ip_local_deliver',
-    'ip_local_deliver_finish',
+    # TC Ingress
+    'tcf_classify': 'TC Ingress',
+    'ingress_redirect': 'TC Ingress',
+    'dev_queue_xmit_nit': 'TC Ingress',
 
-    # === IP Layer - FORWARD Path (3 functions - hook 2) ===
-    'ip_forward',
-    'ip_forward_finish',
-    'ip_forward_options',
+    # Netfilter PREROUTING (will be refined by hook value)
+    'nf_hook_slow': 'Netfilter',  # Generic - refined by hook
+    'nf_hook_thresh': 'Netfilter',
+    'nf_reinject': 'Netfilter',
 
-    # === IP Layer - OUTPUT/POSTROUTING Path (5 functions - hook 3->4) ===
-    'ip_local_out',
-    '__ip_local_out',
-    'ip_output',
-    'ip_finish_output',
-    'ip_finish_output2',
+    # Conntrack
+    'nf_conntrack_in': 'Conntrack',
+    'nf_ct_invert_tuple': 'Conntrack',
+    'nf_confirm': 'Conntrack',
 
-    # === Netfilter Core (4 functions - all hooks) ===
-    'nf_hook_slow',
-    'nf_hook_thresh',
-    'nf_reinject',
-    'nf_queue',
+    # NAT PREROUTING
+    'nf_nat_ipv4_pre_routing': 'NAT PREROUTING',
+    'nf_nat_ipv4_fn': 'NAT',  # Generic NAT function
 
-    # === Connection Tracking (3 functions - PREROUTING/OUTPUT) ===
-    'nf_conntrack_in',
-    'nf_confirm',
-    'nf_conntrack_alloc',
+    # Routing Decision
+    'ip_route_input_slow': 'Routing Decision',
+    'fib_validate_source': 'Routing Decision',
+    'ip_route_output_key_hash': 'Routing',  # Generic routing
 
-    # === NAT (4 functions - PREROUTING/POSTROUTING) ===
-    'nf_nat_ipv4_in',
-    'nf_nat_ipv4_out',
-    'nf_nat_ipv4_local_fn',
-    'nf_nat_ipv4_fn',
+    # Local Delivery
+    'ip_local_deliver': 'Local Delivery',
+    'ip_local_deliver_finish': 'Local Delivery',
 
-    # === Routing (4 functions) ===
-    'ip_route_input_slow',
-    'ip_route_input_noref',
-    'ip_route_output_key_hash',
-    'fib_validate_source',
+    # Netfilter INPUT
+    'nf_queue': 'Netfilter',  # Refined by hook
 
-    # === Transport Layer - TCP (6 functions) ===
-    'tcp_v4_rcv',              # INPUT hook
-    'tcp_v4_do_rcv',           # INPUT hook
-    'tcp_rcv_established',     # INPUT hook
-    'tcp_sendmsg',             # OUTPUT hook
-    'tcp_write_xmit',          # OUTPUT hook
-    'tcp_transmit_skb',        # OUTPUT/POSTROUTING
+    # TCP/UDP (Inbound)
+    'tcp_v4_rcv': 'TCP/UDP',
+    'tcp_v4_do_rcv': 'TCP/UDP',
+    'tcp_rcv_established': 'TCP/UDP',
+    'udp_rcv': 'TCP/UDP',
+    'udp_unicast_rcv_skb': 'TCP/UDP',
 
-    # === Transport Layer - UDP (4 functions) ===
-    'udp_rcv',                 # INPUT hook
-    'udp_unicast_rcv_skb',     # INPUT hook
-    'udp_sendmsg',             # OUTPUT hook
-    'udp_send_skb',            # OUTPUT/POSTROUTING
+    # Socket
+    'sock_def_readable': 'Socket',
+    'sk_filter_trim_cap': 'Socket',
 
-    # === Additional Core Functions (2 functions) ===
-    'ip_sabotage_in',
-    'ip_sabotage_out',
-]
+    # Forward
+    'ip_forward': 'Forward',
+    'ip_forward_finish': 'Forward',
+
+    # === OUTBOUND PIPELINE ===
+    # Application
+    'tcp_sendmsg': 'Application',
+    'udp_sendmsg': 'Application',
+
+    # TCP/UDP Output
+    'tcp_write_xmit': 'TCP/UDP Output',
+    'tcp_transmit_skb': 'TCP/UDP Output',
+    'udp_send_skb': 'TCP/UDP Output',
+
+    # Routing Lookup (outbound)
+    'ip_route_output_flow': 'Routing Lookup',
+
+    # NAT POSTROUTING / OUTPUT
+    'nf_nat_ipv4_out': 'NAT',  # Generic NAT
+    'nf_nat_ipv4_local_fn': 'NAT',
+
+    # TC Egress
+    'sch_direct_xmit': 'TC Egress',
+
+    # Driver TX / NIC TX
+    'dev_queue_xmit': 'Driver TX',
+    '__dev_queue_xmit': 'Driver TX',
+    'dev_hard_start_xmit': 'Driver TX',
+}
+
+# Extract unique function names for tracing
+FIXED_TRACE_FUNCTIONS = list(FUNCTION_TO_LAYER.keys())
+
+# Pipeline structure: defines the flow order for Inbound vs Outbound
+PIPELINE_STRUCTURE = {
+    'Inbound': [
+        'NIC',
+        'Driver (NAPI)',
+        'GRO',
+        'TC Ingress',
+        'Netfilter PREROUTING',
+        'Conntrack',
+        'NAT PREROUTING',
+        'Routing Decision',
+        # Branch 1: Local Delivery
+        'Local Delivery',
+        'Netfilter INPUT',
+        'TCP/UDP',
+        'Socket',
+        # Branch 2: Forward
+        'Forward',
+        'Netfilter FORWARD',
+        'Netfilter POSTROUTING',
+        'NIC TX',
+    ],
+    'Outbound': [
+        'Application',
+        'TCP/UDP Output',
+        'Netfilter OUTPUT',
+        'Routing Lookup',
+        'Routing',
+        'NAT',
+        'Netfilter POSTROUTING',
+        'TC Egress',
+        'Driver TX',
+        'NIC',
+    ]
+}
+
+# Layer position in pipeline (for sorting events by pipeline order)
+LAYER_ORDER = {}
+for direction, layers in PIPELINE_STRUCTURE.items():
+    for idx, layer in enumerate(layers):
+        LAYER_ORDER[f"{direction}:{layer}"] = idx
 
 # Legacy name for backward compatibility
 CRITICAL_FUNCTIONS = FIXED_TRACE_FUNCTIONS
@@ -178,8 +226,8 @@ CRITICAL_FUNCTIONS = FIXED_TRACE_FUNCTIONS
 # BLACKLIST_FUNCTIONS: Không trace (internal/utility)
 BLACKLIST_PATTERNS = [
     'nf_getsockopt', 'nf_setsockopt', 'nf_hook_entries_', 'nf_hook_direct_',
-    'nf_register_', 'nf_unregister_', 'nf_log_', 'nf_queue_', '__nf_hook_',
-    'nf_ct_', 'nf_nat_', 'nf_tables_',
+    'nf_register_', 'nf_unregister_', 'nf_log_', '__nf_hook_',
+    'nf_ct_', 'nf_tables_',
 ]
 
 def is_blacklisted(func_name: str) -> bool:
@@ -188,6 +236,103 @@ def is_blacklisted(func_name: str) -> bool:
         if pattern in func_name:
             return True
     return False
+
+# ============================================================================
+# HELPER FUNCTIONS FOR LAYER MAPPING AND DIRECTION DETECTION
+# ============================================================================
+
+def refine_layer_by_hook(func_name: str, base_layer: str, hook: int) -> str:
+    """
+    Refine generic layer name based on netfilter hook value.
+    Hook values: 0=PREROUTING, 1=INPUT, 2=FORWARD, 3=OUTPUT, 4=POSTROUTING
+    """
+    # nf_hook_slow and similar functions need to be refined by hook
+    if base_layer == 'Netfilter' or 'nf_hook' in func_name or 'nf_queue' in func_name:
+        hook_map = {
+            0: 'Netfilter PREROUTING',
+            1: 'Netfilter INPUT',
+            2: 'Netfilter FORWARD',
+            3: 'Netfilter OUTPUT',
+            4: 'Netfilter POSTROUTING',
+        }
+        return hook_map.get(hook, base_layer)
+
+    # NAT functions need hook context
+    if 'NAT' in base_layer or 'nf_nat' in func_name:
+        if hook == 0:
+            return 'NAT PREROUTING'
+        elif hook in [3, 4]:
+            return 'NAT POSTROUTING'
+        return 'NAT'
+
+    # Routing functions
+    if 'Routing' in base_layer:
+        if 'input' in func_name:
+            return 'Routing Decision'
+        elif 'output' in func_name:
+            return 'Routing Lookup'
+        return base_layer
+
+    return base_layer
+
+def detect_packet_direction(func_name: str, layer: str) -> str:
+    """
+    Detect packet direction (Inbound or Outbound) based on function name and layer.
+
+    Inbound indicators:
+    - NIC RX, Driver NAPI, GRO, TC Ingress
+    - Netfilter PREROUTING/INPUT/FORWARD
+    - ip_rcv, ip_local_deliver, tcp_v4_rcv, udp_rcv
+
+    Outbound indicators:
+    - Application (sendmsg)
+    - Netfilter OUTPUT/POSTROUTING
+    - ip_output, tcp_write_xmit, dev_queue_xmit
+    """
+    # Explicit inbound layers
+    inbound_layers = [
+        'NIC', 'Driver (NAPI)', 'GRO', 'TC Ingress',
+        'Netfilter PREROUTING', 'Netfilter INPUT', 'Netfilter FORWARD',
+        'Conntrack', 'NAT PREROUTING', 'Routing Decision',
+        'Local Delivery', 'Socket'
+    ]
+
+    # Explicit outbound layers
+    outbound_layers = [
+        'Application', 'TCP/UDP Output', 'Netfilter OUTPUT',
+        'Routing Lookup', 'NAT POSTROUTING', 'TC Egress',
+        'Driver TX'
+    ]
+
+    # Check layer-based detection first
+    if layer in inbound_layers:
+        return 'Inbound'
+    if layer in outbound_layers:
+        return 'Outbound'
+
+    # Function name heuristics for ambiguous cases
+    inbound_keywords = ['rcv', 'receive', 'input', 'ingress', 'deliver']
+    outbound_keywords = ['sendmsg', 'xmit', 'transmit', 'output', 'egress']
+
+    func_lower = func_name.lower()
+    for keyword in inbound_keywords:
+        if keyword in func_lower:
+            return 'Inbound'
+    for keyword in outbound_keywords:
+        if keyword in func_lower:
+            return 'Outbound'
+
+    # TCP/UDP and Forward are special - could be both
+    # Default: if layer is TCP/UDP or Forward without clear direction, use Inbound
+    if layer in ['TCP/UDP', 'Forward']:
+        # tcp_sendmsg, udp_sendmsg → Outbound
+        if 'sendmsg' in func_lower:
+            return 'Outbound'
+        # tcp_v4_rcv, udp_rcv → Inbound
+        return 'Inbound'
+
+    # Default to Inbound (most common for generic functions)
+    return 'Inbound'
 
 # ============================================================================
 # KALLSYMS HELPER - Function name lookup from IP
@@ -317,50 +462,96 @@ class UniversalEvent:
 
 @dataclass
 class PacketTrace:
-    """Complete packet trace - Đường đi + Verdict"""
+    """Complete packet trace - Đường đi + Verdict với Pipeline Organization"""
     skb_addr: int
     first_seen: int
     last_seen: int
     events: List[Dict]
-    
+
     # Packet info
     protocol: Optional[int] = None
     src_ip: Optional[str] = None
     dst_ip: Optional[str] = None
     src_port: Optional[int] = None
     dst_port: Optional[int] = None
-    
+
     # NFT verdict info
     final_verdict: Optional[int] = None
     final_verdict_str: Optional[str] = None
     hook: Optional[int] = None
     total_rules_evaluated: int = 0
     verdict_changes: int = 0
-    
-    # Path info
+
+    # Path info (legacy)
     functions_called: List[str] = None
     unique_functions: int = 0
-    
+
+    # NEW: Pipeline organization
+    direction: Optional[str] = None  # "Inbound" or "Outbound"
+    pipeline_stages: List[Dict] = None  # [{"layer": "NIC", "timestamp": ..., "hook": ...}, ...]
+    layer_counts: Dict[str, int] = None  # {"NIC": 2, "Driver (NAPI)": 1, ...}
+
     mode: str = "full"
-    
+
     def __post_init__(self):
         if self.functions_called is None:
             self.functions_called = []
+        if self.pipeline_stages is None:
+            self.pipeline_stages = []
+        if self.layer_counts is None:
+            self.layer_counts = defaultdict(int)
     
-    def add_universal_event(self, event: UniversalEvent):
-        """Add function call event"""
+    def add_universal_event(self, event: UniversalEvent, hook: int = 255):
+        """Add function call event - ONLY if function is in the 50 critical list"""
+
+        # FILTER: Only accept functions in FUNCTION_TO_LAYER
+        if event.func_name not in FUNCTION_TO_LAYER:
+            # Silently drop functions not in our critical list
+            return
+
+        # Map function to layer
+        base_layer = FUNCTION_TO_LAYER[event.func_name]
+
+        # Refine layer based on netfilter hook (if available)
+        layer = refine_layer_by_hook(event.func_name, base_layer, hook)
+
+        # Detect packet direction
+        detected_direction = detect_packet_direction(event.func_name, layer)
+
+        # Set packet direction (first detected direction wins)
+        if self.direction is None:
+            self.direction = detected_direction
+
+        # Create pipeline stage entry
+        stage = {
+            'layer': layer,
+            'timestamp': event.timestamp,
+            'function': event.func_name,
+            'hook': hook if hook != 255 else None,
+            'cpu_id': event.cpu_id,
+            'comm': event.comm,
+        }
+        self.pipeline_stages.append(stage)
+
+        # Update layer counts for statistics
+        self.layer_counts[layer] += 1
+
+        # Legacy event format (for backward compatibility)
         event_dict = {
             'timestamp': event.timestamp, 'trace_type': 'function_call',
-            'function': event.func_name, 'cpu_id': event.cpu_id,
-            'comm': event.comm, 'length': event.length
+            'function': event.func_name, 'layer': layer,
+            'direction': detected_direction,
+            'cpu_id': event.cpu_id, 'comm': event.comm, 'length': event.length
         }
         self.events.append(event_dict)
         self.last_seen = event.timestamp
-        
+
+        # Legacy function tracking
         if event.func_name not in self.functions_called:
             self.functions_called.append(event.func_name)
             self.unique_functions = len(self.functions_called)
-        
+
+        # Extract packet info
         if event.protocol > 0 and self.protocol is None:
             self.protocol = event.protocol
             self.src_ip = self._format_ip(event.src_ip)
@@ -456,50 +647,75 @@ class PacketTrace:
         return socket.inet_ntoa(ip.to_bytes(4, byteorder='little'))
     
     def to_summary(self) -> Dict:
-        """Export summary với full information"""
+        """Export summary with NEW PIPELINE-ORGANIZED FORMAT"""
         sorted_events = sorted(self.events, key=lambda x: x['timestamp'])
-        important_events = []
         function_events = []
         nft_events = []
-        
+
         for event in sorted_events:
             trace_type = event.get('trace_type')
             if trace_type in ['chain_exit', 'rule_eval', 'hook_exit']:
                 nft_events.append(event)
             elif trace_type == 'function_call':
                 function_events.append(event)
-        
-        if len(function_events) > 0:
-            important_events.extend(function_events[:3])
-            if len(function_events) > 5:
-                important_events.extend(function_events[-2:])
-            elif len(function_events) > 3:
-                important_events.extend(function_events[3:])
-        
-        for event in nft_events:
-            if event.get('trace_type') == 'chain_exit':
-                if event.get('chain_depth', 0) == 0:
-                    important_events.append(event)
-            else:
-                important_events.append(event)
-        
-        important_events = sorted(important_events, key=lambda x: x['timestamp'])
-        
+
+        # Sort pipeline stages by timestamp (natural packet flow order)
+        sorted_stages = sorted(self.pipeline_stages, key=lambda x: x['timestamp'])
+
+        # Build pipeline summary: group by layer in order
+        pipeline_summary = []
+        seen_layers = set()
+        for stage in sorted_stages:
+            layer = stage['layer']
+            if layer not in seen_layers:
+                pipeline_summary.append({
+                    'layer': layer,
+                    'first_timestamp': stage['timestamp'],
+                    'count': self.layer_counts.get(layer, 0),
+                })
+                seen_layers.add(layer)
+
+        # NEW FORMAT for frontend visualization
         return {
+            # Packet identification
+            'packet_id': hex(self.skb_addr) if self.skb_addr > 0 else f"synthetic_{self.skb_addr}",
             'skb_addr': hex(self.skb_addr) if self.skb_addr > 0 else f"synthetic_{self.skb_addr}",
-            'first_seen': self.first_seen, 'last_seen': self.last_seen,
+
+            # NEW: Direction and pipeline
+            'direction': self.direction or 'Unknown',
+            'pipeline': PIPELINE_STRUCTURE.get(self.direction, []) if self.direction else [],
+            'stages': sorted_stages,  # Full stage details sorted by time
+            'pipeline_summary': pipeline_summary,  # Layer-wise summary
+
+            # Timing
+            'first_seen': self.first_seen,
+            'last_seen': self.last_seen,
             'duration_ns': self.last_seen - self.first_seen,
-            'protocol': self.protocol, 'protocol_name': self._protocol_name(self.protocol),
-            'src_ip': self.src_ip, 'dst_ip': self.dst_ip,
-            'src_port': self.src_port, 'dst_port': self.dst_port,
-            'functions_path': self.functions_called,
-            'unique_functions': self.unique_functions,
-            'total_functions_called': len(function_events),
-            'hook': self.hook, 'hook_name': self._hook_name(self.hook),
+
+            # Packet info
+            'protocol': self.protocol,
+            'protocol_name': self._protocol_name(self.protocol),
+            'src_ip': self.src_ip,
+            'dst_ip': self.dst_ip,
+            'src_port': self.src_port,
+            'dst_port': self.dst_port,
+
+            # NFT verdict info
+            'hook': self.hook,
+            'hook_name': self._hook_name(self.hook),
             'final_verdict': self.final_verdict_str,
             'total_rules_evaluated': self.total_rules_evaluated,
             'verdict_changes': self.verdict_changes,
-            'important_events': important_events,
+
+            # Statistics
+            'layer_counts': dict(self.layer_counts),
+            'unique_layers': len(seen_layers),
+            'total_events': len(sorted_stages),
+            'functions_path': self.functions_called,  # Legacy
+            'unique_functions': self.unique_functions,  # Legacy
+
+            # All events (for detailed analysis)
+            'all_events': sorted_events,
             'all_events_count': len(sorted_events),
         }
     
@@ -643,11 +859,17 @@ class TraceSession:
         self.func_id_to_name = {}
         self.events_by_func = defaultdict(int)
 
+        # NEW: Pipeline-based statistics (for full mode)
+        self.stats_by_direction_layer = {
+            'Inbound': defaultdict(int),
+            'Outbound': defaultdict(int)
+        }
+
         # Multifunction mode statistics
         self.stats_by_layer = defaultdict(int)
         self.stats_by_hook = defaultdict(int)
         self.stats_by_verdict = defaultdict(int)
-        
+
         self.trace_timeout_ns = 5 * 1_000_000_000
         
         print(f"[DEBUG] Session {session_id} created in {mode.upper()} mode")
@@ -1114,7 +1336,14 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                     func_name = f"unknown_{hex(event.func_ip)}"
                 
                 self.events_by_func[func_name] += 1
-                
+
+                # NEW: Track pipeline stats for realtime visualization
+                if func_name in FUNCTION_TO_LAYER:
+                    base_layer = FUNCTION_TO_LAYER[func_name]
+                    layer = refine_layer_by_hook(func_name, base_layer, event.hook)
+                    direction = detect_packet_direction(func_name, layer)
+                    self.stats_by_direction_layer[direction][layer] += 1
+
                 universal_event = UniversalEvent(
                     timestamp=event.timestamp, cpu_id=event.cpu_id, pid=event.pid,
                     skb_addr=event.skb_addr, func_name=func_name,
@@ -1122,7 +1351,9 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                     src_port=event.src_port, dst_port=event.dst_port,
                     length=event.length, comm=event.comm.decode('utf-8', errors='ignore')
                 )
-                trace.add_universal_event(universal_event)
+                # Pass hook information for proper layer refinement (255 = no hook)
+                hook_value = event.hook if hasattr(event, 'hook') else 255
+                trace.add_universal_event(universal_event, hook=hook_value)
 
                 # === REALTIME: Send function event (ALWAYS for session tracking) ===
                 if REALTIME_AVAILABLE and realtime:
@@ -1291,7 +1522,9 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                     src_port=event.src_port, dst_port=event.dst_port,
                     length=event.length, comm=event.comm.decode('utf-8', errors='ignore')
                 )
-                trace.add_universal_event(universal_event)
+                # Pass hook information for proper layer refinement (255 = no hook)
+                hook_value = event.hook if hasattr(event, 'hook') else 255
+                trace.add_universal_event(universal_event, hook=hook_value)
 
             elif event.event_type in [1, 2, 3]:  # NFT events
                 nft_event = NFTEvent(
@@ -1363,6 +1596,17 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
             })
             summary['functions_list'] = self.functions
 
+        # NEW: Add pipeline stats for full mode
+        if self.mode == 'full':
+            summary['statistics'].update({
+                'pipeline_stats': {
+                    'Inbound': dict(self.stats_by_direction_layer['Inbound']),
+                    'Outbound': dict(self.stats_by_direction_layer['Outbound'])
+                },
+                'inbound_packets': sum(1 for t in self.completed_traces if t.direction == 'Inbound'),
+                'outbound_packets': sum(1 for t in self.completed_traces if t.direction == 'Outbound'),
+            })
+
         if self.mode == 'multifunction':
             summary['statistics'].update({
                 'events_by_layer': dict(self.stats_by_layer),
@@ -1397,6 +1641,15 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                 'start_time': self.start_time.isoformat(),
                 'uptime_seconds': (datetime.now() - self.start_time).total_seconds()
             }
+
+            # NEW: Pipeline stats for full mode
+            if self.mode == 'full':
+                stats.update({
+                    'stats': {
+                        'Inbound': dict(self.stats_by_direction_layer['Inbound']),
+                        'Outbound': dict(self.stats_by_direction_layer['Outbound'])
+                    }
+                })
 
             if self.mode == 'multifunction':
                 stats.update({
