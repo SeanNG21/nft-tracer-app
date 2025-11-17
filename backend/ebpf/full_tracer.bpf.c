@@ -202,24 +202,30 @@ static __always_inline void extract_packet_info_from_pkt(void *pkt, struct trace
 int trace_skb_func(struct pt_regs *ctx, struct sk_buff *skb)
 {
     u64 tid = bpf_get_current_pid_tgid();
-    
+
     struct trace_event evt = {};
     evt.timestamp = bpf_ktime_get_ns();
     evt.cpu_id = bpf_get_smp_processor_id();
     evt.pid = (u32)(tid >> 32);
     evt.event_type = EVENT_TYPE_FUNCTION_CALL;
-    
+
     // CRITICAL: Get function IP for name lookup in userspace
     evt.func_ip = PT_REGS_IP(ctx);
-    
+
     extract_packet_info_from_skb(skb, &evt);
     read_comm_safe(evt.comm, sizeof(evt.comm));
-    
+
+    // FILTER: Skip packets from/to app ports (3000=frontend, 5000=backend) to avoid loops
+    if (evt.src_port == 3000 || evt.dst_port == 3000 ||
+        evt.src_port == 5000 || evt.dst_port == 5000) {
+        return 0;
+    }
+
     // Store in map for NFT hooks using TID as key (consistent with kretprobe)
     if (evt.skb_addr != 0) {
         skb_info_map.update(&tid, &evt);
     }
-    
+
     events.perf_submit(ctx, &evt, sizeof(evt));
     return 0;
 }
@@ -251,15 +257,28 @@ int kprobe__nft_do_chain(struct pt_regs *ctx)
     evt.event_type = EVENT_TYPE_NFT_CHAIN;
     evt.chain_addr = (u64)priv;
     evt.chain_depth = depth;
-    
+
     extract_packet_info_from_pkt(pkt, &evt);
     read_comm_safe(evt.comm, sizeof(evt.comm));
-    
+
+    // FILTER: Skip packets from/to app ports (3000=frontend, 5000=backend) to avoid loops
+    if (evt.src_port == 3000 || evt.dst_port == 3000 ||
+        evt.src_port == 5000 || evt.dst_port == 5000) {
+        // Cleanup depth map before returning
+        if (cur_depth && *cur_depth > 0) {
+            u8 new_depth = *cur_depth - 1;
+            depth_map.update(&tid, &new_depth);
+        } else {
+            depth_map.delete(&tid);
+        }
+        return 0;
+    }
+
     // Store with TID as key for kretprobe to retrieve
     if (evt.skb_addr != 0) {
         skb_info_map.update(&tid, &evt);
     }
-    
+
     // FIX #1: DO NOT emit event here - wait for kretprobe to emit chain_exit with verdict
     // This eliminates duplicate chain_exit events
     return 0;
