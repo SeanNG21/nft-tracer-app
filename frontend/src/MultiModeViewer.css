@@ -1,0 +1,479 @@
+/* Multi-Mode Viewer Styles */
+.multi-mode-viewer {
+  padding: 1rem;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* Header Card */
+.mmv-header-card {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 1.5rem;
+  border-radius: 12px;
+  margin-bottom: 1.5rem;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.mmv-header-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.mmv-header-title h2 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.mmv-header-badge {
+  background: rgba(255, 255, 255, 0.2);
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+}
+
+.mmv-header-badge code {
+  background: rgba(0, 0, 0, 0.2);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-family: 'Monaco', 'Courier New', monospace;
+  color: #fff;
+}
+
+.mmv-stats-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+}
+
+.mmv-stat-item {
+  background: rgba(255, 255, 255, 0.15);
+  padding: 1rem;
+  border-radius: 8px;
+  backdrop-filter: blur(10px);
+}
+
+.mmv-stat-label {
+  display: block;
+  font-size: 0.75rem;
+  opacity: 0.9;
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.mmv-stat-value {
+  display: block;
+  font-size: 1.5rem;
+  font-weight: bold;
+}
+
+/* Card Styles */
+.mmv-card {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  margin-bottom: 1.5rem;
+  overflow: hidden;
+}
+
+.mmv-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.5rem;
+  background: #f8f9fa;
+  border-bottom: 1px solid #e9ecef;
+  cursor: pointer;
+  user-select: none;
+}
+
+.mmv-card-header:hover {
+  background: #e9ecef;
+}
+
+.mmv-card-header h3 {
+  margin: 0;
+  font-size: 1.125rem;
+  color: #333;
+}
+
+.mmv-toggle-icon {
+  font-size: 0.875rem;
+  color: #666;
+}
+
+.mmv-card-content {
+  padding: 1.5rem;
+}
+
+/* Network Info */
+.mmv-network-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.mmv-network-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mmv-network-label {
+  font-size: 0.75rem;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.mmv-network-value {
+  font-size: 1rem;
+  color: #333;
+}
+
+.mmv-network-value code {
+  background: #f8f9fa;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-family: 'Monaco', 'Courier New', monospace;
+  font-size: 0.875rem;
+}
+
+.mmv-badge {
+  display: inline-block;
+  background: #667eea;
+  color: white;
+  padding: 0.25rem 0.75rem;
+  border-radius: 12px;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+/* Filter Bar */
+.mmv-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.mmv-filter-btn {
+  padding: 0.5rem 1rem;
+  border: 2px solid #e9ecef;
+  background: white;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: all 0.2s;
+  color: #333;
+  font-weight: 500;
+}
+
+.mmv-filter-btn:hover {
+  border-color: var(--category-color, #667eea);
+  background: var(--category-color, #667eea);
+  color: white;
+}
+
+.mmv-filter-btn.active {
+  border-color: var(--category-color, #667eea);
+  background: var(--category-color, #667eea);
+  color: white;
+}
+
+/* Function List */
+.mmv-function-list {
+  max-height: 600px;
+  overflow-y: auto;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+}
+
+.mmv-function-item {
+  display: grid;
+  grid-template-columns: 50px 15px 1fr auto;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #e9ecef;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.mmv-function-item:last-child {
+  border-bottom: none;
+}
+
+.mmv-function-item:hover {
+  background: #f8f9fa;
+}
+
+.mmv-function-item.selected {
+  background: #e8f4f8;
+  border-left: 3px solid #667eea;
+}
+
+.mmv-function-index {
+  text-align: center;
+  font-size: 0.875rem;
+  color: #999;
+  font-weight: 600;
+}
+
+.mmv-function-category-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.mmv-function-name {
+  font-family: 'Monaco', 'Courier New', monospace;
+  font-size: 0.875rem;
+}
+
+.mmv-function-name code {
+  background: transparent;
+  padding: 0;
+  color: #333;
+}
+
+.mmv-function-category {
+  font-size: 0.75rem;
+  color: #666;
+  padding: 0.25rem 0.75rem;
+  background: #f8f9fa;
+  border-radius: 12px;
+  white-space: nowrap;
+}
+
+/* NFT Timeline */
+.mmv-nft-timeline {
+  position: relative;
+}
+
+.mmv-nft-event {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.mmv-nft-event:last-child {
+  margin-bottom: 0;
+}
+
+.mmv-nft-event-marker {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 0.5rem;
+}
+
+.mmv-nft-event-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #667eea;
+  border: 3px solid white;
+  box-shadow: 0 0 0 3px #667eea;
+  z-index: 1;
+}
+
+.mmv-nft-event-line {
+  width: 2px;
+  flex: 1;
+  background: #e9ecef;
+  margin-top: 4px;
+  min-height: 40px;
+}
+
+.mmv-nft-event-content {
+  flex: 1;
+  background: #f8f9fa;
+  padding: 1rem;
+  border-radius: 8px;
+  border: 1px solid #e9ecef;
+}
+
+.mmv-nft-event-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.mmv-nft-event-type {
+  font-weight: 600;
+  color: #333;
+  font-size: 0.875rem;
+}
+
+.mmv-nft-event-time {
+  font-family: 'Monaco', 'Courier New', monospace;
+  font-size: 0.75rem;
+  color: #666;
+}
+
+.mmv-nft-event-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mmv-nft-detail {
+  font-size: 0.875rem;
+  color: #666;
+}
+
+.mmv-nft-detail strong {
+  color: #333;
+  margin-right: 0.5rem;
+}
+
+/* Verdict Badge */
+.mmv-verdict {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  margin-left: 0.5rem;
+}
+
+.mmv-verdict-accept {
+  background: #d4edda;
+  color: #155724;
+}
+
+.mmv-verdict-drop {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.mmv-verdict-continue {
+  background: #d1ecf1;
+  color: #0c5460;
+}
+
+.mmv-verdict-return {
+  background: #fff3cd;
+  color: #856404;
+}
+
+/* Category Grid */
+.mmv-category-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 1rem;
+}
+
+.mmv-category-card {
+  background: #f8f9fa;
+  padding: 1rem;
+  border-radius: 8px;
+  border: 1px solid #e9ecef;
+  position: relative;
+  overflow: hidden;
+}
+
+.mmv-category-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.mmv-category-icon {
+  font-size: 1.25rem;
+}
+
+.mmv-category-name {
+  font-weight: 600;
+  text-transform: capitalize;
+  color: #333;
+  font-size: 0.875rem;
+}
+
+.mmv-category-count {
+  font-size: 2rem;
+  font-weight: bold;
+  color: #333;
+  margin-bottom: 0.5rem;
+}
+
+.mmv-category-bar {
+  height: 4px;
+  background: #667eea;
+  border-radius: 2px;
+  margin-bottom: 0.5rem;
+  transition: width 0.5s ease;
+}
+
+.mmv-category-percentage {
+  font-size: 0.75rem;
+  color: #666;
+  text-align: right;
+}
+
+/* Empty State */
+.mmv-empty-state {
+  text-align: center;
+  padding: 2rem;
+  color: #666;
+  font-style: italic;
+}
+
+/* Scrollbar Styling */
+.mmv-function-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.mmv-function-list::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+.mmv-function-list::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+.mmv-function-list::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .mmv-stats-row {
+    grid-template-columns: 1fr;
+  }
+
+  .mmv-function-item {
+    grid-template-columns: 40px 10px 1fr;
+    gap: 0.5rem;
+  }
+
+  .mmv-function-category {
+    display: none;
+  }
+
+  .mmv-category-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mmv-filter-bar {
+    flex-direction: column;
+  }
+
+  .mmv-filter-btn {
+    width: 100%;
+  }
+}

@@ -297,25 +297,43 @@ function App() {
                   >
                     {modes.map(mode => (
                       <option key={mode.id} value={mode.id}>
-                        {mode.name} {mode.recommended ? '⭐' : ''} - {mode.description}
+                        {mode.name} {mode.recommended ? '⭐' : ''} {mode.advanced ? '🚀' : ''} - {mode.description}
                       </option>
                     ))}
                   </select>
+                  {newSession.mode === 'multi' && (
+                    <small style={{display: 'block', marginTop: '0.5rem', padding: '0.75rem', background: '#fff3cd', borderRadius: '6px', color: '#856404'}}>
+                      <strong>⚠️ Advanced Mode:</strong> Trace 1000+ functions như pwru/cilium.
+                      Có thể gây high CPU overhead. Recommended cho deep packet analysis.
+                    </small>
+                  )}
                 </div>
 
-                {(newSession.mode === 'universal' || newSession.mode === 'full') && (
+                {(newSession.mode === 'universal' || newSession.mode === 'full' || newSession.mode === 'multi') && (
                   <div className="form-group">
                     <label>Max Functions</label>
                     <input
                       type="number"
                       min="1"
-                      max="100"
+                      max={newSession.mode === 'multi' ? 2000 : 100}
                       value={newSession.maxFunctions}
                       onChange={(e) => setNewSession({...newSession, maxFunctions: parseInt(e.target.value)})}
                     />
-                    <small>Số lượng kernel functions được trace (1-100)</small>
-                    {newSession.maxFunctions > 50 && (
-                      <small className="warning">⚠️ Số lượng lớn có thể gây overhead cao</small>
+                    {newSession.mode === 'multi' ? (
+                      <>
+                        <small>Số lượng kernel functions được trace (1-2000).
+                          Set 0 để trace TẤT CẢ discovered functions.</small>
+                        {newSession.maxFunctions > 500 && (
+                          <small className="warning">⚠️ {newSession.maxFunctions}+ functions sẽ gây very high overhead!</small>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <small>Số lượng kernel functions được trace (1-100)</small>
+                        {newSession.maxFunctions > 50 && (
+                          <small className="warning">⚠️ Số lượng lớn có thể gây overhead cao</small>
+                        )}
+                      </>
                     )}
                   </div>
                 )}
@@ -366,7 +384,7 @@ function App() {
                         </div>
                       </div>
 
-                      {(session.mode === 'universal' || session.mode === 'full') && (
+                      {(session.mode === 'universal' || session.mode === 'full' || session.mode === 'multi') && (
                         <div className="session-stats">
                           <div className="stat">
                             <span className="stat-label">Active Packets</span>
@@ -377,7 +395,7 @@ function App() {
                             <span className="stat-value">{session.completed_packets || 0}</span>
                           </div>
                           <div className="stat">
-                            <span className="stat-label">Functions</span>
+                            <span className="stat-label">Functions {session.mode === 'multi' ? '🚀' : ''}</span>
                             <span className="stat-value">{session.functions_traced}</span>
                           </div>
                           <div className="stat">

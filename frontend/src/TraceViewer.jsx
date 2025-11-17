@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import PacketList from './PacketList';
 import PacketDetail from './PacketDetail';
+import MultiModeViewer from './MultiModeViewer';
 import './TraceViewer.css';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
@@ -200,7 +201,9 @@ const TraceViewer = ({ filename }) => {
         {selectedPacket && (
           <div className="packet-detail-panel">
             <div className="packet-detail-header">
-              <h3>Packet Detail</h3>
+              <h3>
+                {traceData?.session?.mode === 'multi' ? '🚀 Multi-Mode Packet Detail' : 'Packet Detail'}
+              </h3>
               <button
                 className="close-button"
                 onClick={() => setSelectedPacket(null)}
@@ -208,10 +211,16 @@ const TraceViewer = ({ filename }) => {
                 ✕
               </button>
             </div>
-            <PacketDetail
-              packet={selectedPacket}
-              onClose={() => setSelectedPacket(null)}
-            />
+
+            {/* Conditional Rendering: MultiModeViewer for multi mode, PacketDetail for others */}
+            {traceData?.session?.mode === 'multi' ? (
+              <MultiModeViewer trace={selectedPacket} />
+            ) : (
+              <PacketDetail
+                packet={selectedPacket}
+                onClose={() => setSelectedPacket(null)}
+              />
+            )}
           </div>
         )}
       </div>

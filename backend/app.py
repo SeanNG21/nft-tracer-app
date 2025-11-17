@@ -1449,13 +1449,17 @@ def list_files():
 def get_modes():
     return jsonify({
         'modes': [
-            {'id': 'nft', 'name': 'NFT Tracer', 
+            {'id': 'nft', 'name': 'NFT Tracer',
              'description': 'Trace nftables rules và verdicts'},
-            {'id': 'universal', 'name': 'Universal Tracer', 
+            {'id': 'universal', 'name': 'Universal Tracer',
              'description': 'Trace đường đi packet qua kernel functions'},
-            {'id': 'full', 'name': 'Full Tracer (Recommended)', 
+            {'id': 'full', 'name': 'Full Tracer (Recommended)',
              'description': 'Trace ĐẦY ĐỦ: đường đi + verdict cuối cùng',
-             'recommended': True}
+             'recommended': True},
+            {'id': 'multi', 'name': 'Multi-Function Tracer (Advanced)',
+             'description': 'Trace TOÀN BỘ network stack (1000+ functions) + NFT verdicts',
+             'recommended': False,
+             'advanced': True}
         ]
     })
 
