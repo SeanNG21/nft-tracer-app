@@ -3,6 +3,7 @@ import axios from 'axios';
 import RealtimeView from './RealtimeView';
 import SessionRealtimeStats from './SessionRealtimeStats';
 import TraceViewer from './TraceViewer';
+import NFTablesManager from './NFTablesManager';
 import './App.css';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
@@ -248,23 +249,29 @@ function App() {
           >
             📊 Sessions
           </button>
-          <button 
+          <button
             className={`tab ${activeTab === 'realtime' ? 'active' : ''}`}
             onClick={() => setActiveTab('realtime')}
           >
             🎥 Realtime
           </button>
-          <button 
+          <button
             className={`tab ${activeTab === 'discovery' ? 'active' : ''}`}
             onClick={() => setActiveTab('discovery')}
           >
-            🔬 Discovery
+            🔍 Discovery
           </button>
-          <button 
+          <button
             className={`tab ${activeTab === 'files' ? 'active' : ''}`}
             onClick={() => setActiveTab('files')}
           >
             📁 Files ({files.length})
+          </button>
+          <button
+            className={`tab ${activeTab === 'nftables' ? 'active' : ''}`}
+            onClick={() => setActiveTab('nftables')}
+          >
+            🛡️ NFTables Manager
           </button>
         </div>
 
@@ -688,11 +695,16 @@ function App() {
             )}
           </section>
         )}
+
+        {/* TAB: NFTables Manager */}
+        {activeTab === 'nftables' && (
+          <NFTablesManager />
+        )}
         </div>
 
-        
+
       )}
-       
+
     </div>
   );
 }

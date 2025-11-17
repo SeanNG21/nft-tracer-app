@@ -21,6 +21,7 @@ from flask_cors import CORS
 import psutil
 
 from btf_skb_discoverer import BTFSKBDiscoverer
+from nftables_manager import NFTablesManager
 
 try:
     from bcc import BPF
@@ -54,12 +55,29 @@ except ImportError as e:
     print("[!] Install: pip3 install flask-socketio python-socketio")
 
 # ============================================================================
+# MULTI-FUNCTION TRACER INTEGRATION - DISABLED (now integrated into sessions)
+# ============================================================================
+# Multi-function mode is now part of TraceSession (mode='multifunction')
+# The standalone integration is disabled
+MULTI_FUNCTION_AVAILABLE = False
+# try:
+#     from multi_function_integration import add_multi_function_routes, cleanup_multi_function
+#     add_multi_function_routes(app, socketio)
+#     MULTI_FUNCTION_AVAILABLE = True
+#     print("[✓] Multi-function tracer module loaded")
+# except ImportError as e:
+#     MULTI_FUNCTION_AVAILABLE = False
+#     print(f"[!] Multi-function tracer not available: {e}")
+
+# ============================================================================
 # CONFIGURATION
 # ============================================================================
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 NFT_TRACER_PATH = os.path.join(os.path.dirname(__file__), "nft_tracer.bpf.c")
 FULL_TRACER_PATH = os.path.join(os.path.dirname(__file__), "full_tracer.bpf.c")
+MULTIFUNCTION_TRACER_PATH = os.path.join(os.path.dirname(__file__), "multi_function_nft_trace_v2.bpf.c")
 FUNCTIONS_CACHE = os.path.join(os.path.dirname(__file__), "skb_functions.json")
+TRACE_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "trace_config.json")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -524,27 +542,33 @@ class TraceSession:
         self.bpf_nft = None
         self.bpf_universal = None
         self.bpf_full = None
+        self.bpf_multifunction = None
         self.thread = None
-        
+
         self.packet_traces: Dict[int, PacketTrace] = {}
         self.completed_traces: List[PacketTrace] = []
         self.lock = threading.Lock()
-        
+
         self.total_events = 0
         self.events_per_second = 0
         self.last_stats_time = time.time()
         self.last_event_count = 0
-        
+
         self.hostname = socket.gethostname()
         self.kernel_version = platform.release()
         self.cpu_count = psutil.cpu_count()
-        
+
         self.synthetic_id_counter = -1
         self.skb_zero_count = 0
-        
+
         self.functions = []
         self.func_id_to_name = {}
         self.events_by_func = defaultdict(int)
+
+        # Multifunction mode statistics
+        self.stats_by_layer = defaultdict(int)
+        self.stats_by_hook = defaultdict(int)
+        self.stats_by_verdict = defaultdict(int)
         
         self.trace_timeout_ns = 5 * 1_000_000_000
         
@@ -553,7 +577,7 @@ class TraceSession:
     def start(self) -> bool:
         if not BCC_AVAILABLE:
             return False
-        
+
         try:
             if self.mode == 'nft':
                 return self._start_nft_only()
@@ -561,10 +585,12 @@ class TraceSession:
                 return self._start_universal_only()
             elif self.mode == 'full':
                 return self._start_full_mode()
+            elif self.mode == 'multifunction':
+                return self._start_multifunction_mode()
             else:
                 print(f"[ERROR] Unknown mode: {self.mode}")
                 return False
-                
+
         except Exception as e:
             print(f"[ERROR] Starting session: {e}")
             import traceback
@@ -702,9 +728,125 @@ class TraceSession:
             self.cleanup_thread.daemon = True
             self.cleanup_thread.start()
             print(f"[✓] Universal mode started")
-        
+
         return True
-    
+
+    def _start_multifunction_mode(self) -> bool:
+        """Start multi-function tracer mode with layer and hook statistics"""
+        print("[*] Starting MULTIFUNCTION mode (Multi-function + NFT + Layer stats)...")
+
+        # Load trace configuration
+        functions_to_trace = []
+        if os.path.exists(TRACE_CONFIG_PATH):
+            print(f"[*] Loading trace config from {TRACE_CONFIG_PATH}")
+            with open(TRACE_CONFIG_PATH, 'r') as f:
+                config = json.load(f)
+                funcs = config.get('functions', [])
+                # Filter enabled functions up to max_functions limit
+                enabled_funcs = [f for f in funcs if f.get('enabled', True)]
+                functions_to_trace = enabled_funcs[:self.max_functions]
+        else:
+            print("[!] No trace_config.json found, using critical functions")
+            functions_to_trace = [
+                {'name': f, 'layer': 'Core', 'priority': 0}
+                for f in CRITICAL_FUNCTIONS if not is_blacklisted(f)
+            ][:self.max_functions]
+
+        self.functions = functions_to_trace
+        print(f"[*] Total functions to trace: {len(self.functions)}")
+
+        # Generate dynamic BPF code with wrapper functions
+        with open(MULTIFUNCTION_TRACER_PATH, 'r') as f:
+            base_bpf_code = f.read()
+
+        # Generate wrapper functions for each traced function
+        wrappers = []
+        for idx, func in enumerate(functions_to_trace):
+            func_name = func['name'] if isinstance(func, dict) else func
+            wrapper = f"""
+int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
+    return trace_skb_generic(ctx, skb, {idx});
+}}
+"""
+            wrappers.append(wrapper)
+
+        full_bpf_code = base_bpf_code + "\n\n// === Generated wrapper functions ===\n" + "".join(wrappers)
+
+        # Compile BPF
+        print("[*] Compiling BPF program...")
+        self.bpf_multifunction = BPF(text=full_bpf_code)
+
+        # Populate metadata map
+        print("[*] Populating function metadata...")
+        func_meta_map = self.bpf_multifunction.get_table("func_meta")
+        for idx, func in enumerate(functions_to_trace):
+            if isinstance(func, dict):
+                func_name = func['name']
+                layer = func.get('layer', 'Unknown')
+                priority = func.get('priority', 2)
+            else:
+                func_name = func
+                layer = 'Unknown'
+                priority = 2
+
+            # Create metadata entry
+            meta = func_meta_map.Leaf()
+            meta.name = func_name.encode('utf-8')[:63] + b'\x00'
+            meta.layer = layer.encode('utf-8')[:15] + b'\x00'
+            meta.priority = priority
+            func_meta_map[func_meta_map.Key(idx)] = meta
+
+            self.func_id_to_name[idx] = func_name
+
+        # Attach NFT hooks
+        print("[*] Attaching NFT hooks...")
+        try:
+            # Hook state tracking (CRITICAL for correct hook detection)
+            self.bpf_multifunction.attach_kprobe(event="nf_hook_slow", fn_name="kprobe__nf_hook_slow")
+            self.bpf_multifunction.attach_kretprobe(event="nf_hook_slow", fn_name="kretprobe__nf_hook_slow")
+
+            # NFT specific hooks
+            self.bpf_multifunction.attach_kprobe(event="nft_do_chain", fn_name="kprobe__nft_do_chain")
+            self.bpf_multifunction.attach_kretprobe(event="nft_do_chain", fn_name="kretprobe__nft_do_chain")
+            self.bpf_multifunction.attach_kprobe(event="nft_immediate_eval", fn_name="kprobe__nft_immediate_eval")
+            print("[✓] NFT hooks attached (including nf_hook_slow for hook tracking)")
+        except Exception as e:
+            print(f"[!] Warning: NFT hooks failed - {e}")
+
+        # Attach function kprobes
+        print("[*] Attaching packet path functions...")
+        attached = 0
+        failed = 0
+        for idx, func in enumerate(functions_to_trace):
+            func_name = func['name'] if isinstance(func, dict) else func
+            try:
+                self.bpf_multifunction.attach_kprobe(event=func_name, fn_name=f"trace_{idx}")
+                attached += 1
+            except Exception as e:
+                failed += 1
+
+        print(f"[✓] Attached {attached}/{len(functions_to_trace)} functions ({failed} failed)")
+
+        # Open perf buffer
+        self.bpf_multifunction["events"].open_perf_buffer(
+            self._handle_multifunction_event,
+            page_cnt=256  # 1MB buffer
+        )
+
+        # Start polling thread
+        self.running = True
+        self.thread = threading.Thread(target=self._poll_multifunction_events)
+        self.thread.daemon = True
+        self.thread.start()
+
+        # Start cleanup thread
+        self.cleanup_thread = threading.Thread(target=self._cleanup_old_traces)
+        self.cleanup_thread.daemon = True
+        self.cleanup_thread.start()
+
+        print("[✓] MULTIFUNCTION MODE READY!")
+        return True
+
     def stop(self) -> str:
         self.running = False
         self.end_time = datetime.now()
@@ -736,7 +878,13 @@ class TraceSession:
                 self.bpf_full.cleanup()
             except:
                 pass
-        
+
+        if hasattr(self, 'bpf_multifunction') and self.bpf_multifunction:
+            try:
+                self.bpf_multifunction.cleanup()
+            except:
+                pass
+
         return output_path
     
     def _poll_nft_events(self):
@@ -765,7 +913,16 @@ class TraceSession:
                 if self.running:
                     print(f"[ERROR] FULL mode polling: {e}")
                 break
-    
+
+    def _poll_multifunction_events(self):
+        while self.running:
+            try:
+                self.bpf_multifunction.perf_buffer_poll(timeout=100)
+            except Exception as e:
+                if self.running:
+                    print(f"[ERROR] MULTIFUNCTION mode polling: {e}")
+                break
+
     def _cleanup_old_traces(self):
         while self.running:
             time.sleep(2)
@@ -947,7 +1104,113 @@ class TraceSession:
             
             trace = self.packet_traces[skb_addr]
             trace.add_universal_event(universal_event)
-    
+
+    def _handle_multifunction_event(self, cpu, data, size):
+        """Handle multifunction mode event - collect stats by layer and hook"""
+        import ctypes as ct
+
+        class MultiFunctionEvent(ct.Structure):
+            _fields_ = [
+                ("timestamp", ct.c_ulonglong), ("skb_addr", ct.c_ulonglong),
+                ("cpu_id", ct.c_uint), ("pid", ct.c_uint),
+                ("event_type", ct.c_ubyte), ("hook", ct.c_ubyte),
+                ("pf", ct.c_ubyte), ("protocol", ct.c_ubyte),
+                ("src_ip", ct.c_uint), ("dst_ip", ct.c_uint),
+                ("src_port", ct.c_ushort), ("dst_port", ct.c_ushort),
+                ("length", ct.c_uint), ("chain_addr", ct.c_ulonglong),
+                ("expr_addr", ct.c_ulonglong), ("chain_depth", ct.c_ubyte),
+                ("rule_seq", ct.c_ushort), ("rule_handle", ct.c_ulonglong),
+                ("verdict_raw", ct.c_int), ("verdict", ct.c_uint),
+                ("queue_num", ct.c_ushort), ("has_queue_bypass", ct.c_ubyte),
+                ("func_name", ct.c_char * 64), ("layer", ct.c_char * 16),
+                ("comm", ct.c_char * 16),
+            ]
+
+        event = ct.cast(data, ct.POINTER(MultiFunctionEvent)).contents
+
+        with self.lock:
+            self.total_events += 1
+            self._update_stats()
+
+            # Extract info
+            func_name = event.func_name.decode('utf-8', errors='ignore').strip() or 'unknown'
+            layer = event.layer.decode('utf-8', errors='ignore').strip() or 'Unknown'
+
+            # Update statistics by layer and hook
+            self.stats_by_layer[layer] += 1
+            if event.hook != 255:
+                hook_name = ['PREROUTING', 'INPUT', 'FORWARD', 'OUTPUT', 'POSTROUTING'][event.hook] if event.hook < 5 else 'UNKNOWN'
+                self.stats_by_hook[hook_name] += 1
+
+            # Update verdict statistics
+            if event.verdict != 255:
+                verdict_name = ['DROP', 'ACCEPT', 'STOLEN', 'QUEUE', 'REPEAT', 'STOP'][event.verdict] if event.verdict < 6 else 'UNKNOWN'
+                self.stats_by_verdict[verdict_name] += 1
+
+            # Track function hits
+            self.events_by_func[func_name] += 1
+
+            # === REALTIME: Send event for session tracking ===
+            if REALTIME_AVAILABLE and realtime:
+                try:
+                    realtime.process_session_event({
+                        'event_type': 'multifunction',
+                        'func_name': func_name,
+                        'layer': layer,
+                        'hook': event.hook,
+                        'verdict': event.verdict,
+                        'protocol': event.protocol,
+                        'timestamp': time.time()
+                    }, self.session_id)
+                except Exception as e:
+                    # Silent fail - don't break session if realtime fails
+                    pass
+
+            skb_addr = event.skb_addr if event.skb_addr != 0 else event.chain_addr
+            if skb_addr == 0:
+                return
+
+            if skb_addr not in self.packet_traces:
+                self.packet_traces[skb_addr] = PacketTrace(
+                    skb_addr=skb_addr, first_seen=event.timestamp,
+                    last_seen=event.timestamp, events=[], mode="multifunction"
+                )
+
+            trace = self.packet_traces[skb_addr]
+
+            if event.event_type == 0:  # Function call
+                universal_event = UniversalEvent(
+                    timestamp=event.timestamp, cpu_id=event.cpu_id, pid=event.pid,
+                    skb_addr=event.skb_addr, func_name=func_name,
+                    protocol=event.protocol, src_ip=event.src_ip, dst_ip=event.dst_ip,
+                    src_port=event.src_port, dst_port=event.dst_port,
+                    length=event.length, comm=event.comm.decode('utf-8', errors='ignore')
+                )
+                trace.add_universal_event(universal_event)
+
+            elif event.event_type in [1, 2, 3]:  # NFT events
+                nft_event = NFTEvent(
+                    timestamp=event.timestamp, cpu_id=event.cpu_id, pid=event.pid,
+                    skb_addr=event.skb_addr, chain_addr=event.chain_addr,
+                    expr_addr=event.expr_addr, regs_addr=0,
+                    hook=event.hook, chain_depth=event.chain_depth,
+                    trace_type=event.event_type - 1, pf=event.pf,
+                    verdict=event.verdict, verdict_raw=event.verdict_raw,
+                    queue_num=event.queue_num, rule_seq=event.rule_seq,
+                    has_queue_bypass=event.has_queue_bypass, protocol=event.protocol,
+                    src_ip=event.src_ip, dst_ip=event.dst_ip,
+                    src_port=event.src_port, dst_port=event.dst_port,
+                    rule_handle=event.rule_handle,
+                    comm=event.comm.decode('utf-8', errors='ignore')
+                )
+                trace.add_nft_event(nft_event)
+
+                # Mark packet as complete on verdict
+                if event.event_type == 1 and event.verdict in [0, 1]:
+                    if skb_addr in self.packet_traces:
+                        self.completed_traces.append(trace)
+                        del self.packet_traces[skb_addr]
+
     def _get_skb_addr(self, skb_addr: int, chain_addr: int) -> int:
         if skb_addr == 0:
             self.skb_zero_count += 1
@@ -986,16 +1249,23 @@ class TraceSession:
             'traces': [trace.to_summary() for trace in self.completed_traces]
         }
         
-        if self.mode in ['universal', 'full']:
+        if self.mode in ['universal', 'full', 'multifunction']:
             summary['statistics'].update({
                 'functions_traced': len(self.functions),
                 'functions_hit': len(self.events_by_func),
-                'top_functions': dict(sorted(self.events_by_func.items(), 
+                'top_functions': dict(sorted(self.events_by_func.items(),
                                             key=lambda x: x[1], reverse=True)[:20])
             })
             summary['functions_list'] = self.functions
-        
-        if self.mode in ['nft', 'full']:
+
+        if self.mode == 'multifunction':
+            summary['statistics'].update({
+                'events_by_layer': dict(self.stats_by_layer),
+                'events_by_hook': dict(self.stats_by_hook),
+                'events_by_verdict': dict(self.stats_by_verdict),
+            })
+
+        if self.mode in ['nft', 'full', 'multifunction']:
             drops = sum(1 for t in self.completed_traces if t.final_verdict == 0)
             accepts = sum(1 for t in self.completed_traces if t.final_verdict == 1)
             summary['statistics'].update({
@@ -1011,17 +1281,26 @@ class TraceSession:
     
     def get_stats(self) -> Dict:
         with self.lock:
-            return {
+            stats = {
                 'session_id': self.session_id, 'mode': self.mode,
                 'running': self.running, 'total_events': self.total_events,
                 'events_per_second': self.events_per_second,
                 'active_packets': len(self.packet_traces),
                 'completed_packets': len(self.completed_traces),
-                'functions_traced': len(self.functions) if self.mode in ['universal', 'full'] else 0,
-                'functions_hit': len(self.events_by_func) if self.mode in ['universal', 'full'] else 0,
+                'functions_traced': len(self.functions) if self.mode in ['universal', 'full', 'multifunction'] else 0,
+                'functions_hit': len(self.events_by_func) if self.mode in ['universal', 'full', 'multifunction'] else 0,
                 'start_time': self.start_time.isoformat(),
                 'uptime_seconds': (datetime.now() - self.start_time).total_seconds()
             }
+
+            if self.mode == 'multifunction':
+                stats.update({
+                    'events_by_layer': dict(self.stats_by_layer),
+                    'events_by_hook': dict(self.stats_by_hook),
+                    'events_by_verdict': dict(self.stats_by_verdict),
+                })
+
+            return stats
 
 # ============================================================================
 # SESSION MANAGER & FLASK API
@@ -1124,14 +1403,14 @@ def create_session():
     data = request.json
     session_id = data.get('session_id', f"trace_{int(time.time() * 1000)}")
     mode = data.get('mode', 'nft')
-    
-    if mode not in ['nft', 'universal', 'full']:
-        return jsonify({'error': 'Invalid mode. Use: nft, universal, or full'}), 400
-    
+
+    if mode not in ['nft', 'universal', 'full', 'multifunction']:
+        return jsonify({'error': 'Invalid mode. Use: nft, universal, full, or multifunction'}), 400
+
     success = session_manager.create_session(
-        session_id, mode, data.get('pcap_filter', ''), data.get('max_functions', 30)
+        session_id, mode, data.get('pcap_filter', ''), data.get('max_functions', 50)
     )
-    
+
     if success:
         return jsonify({'status': 'started', 'session_id': session_id, 'mode': mode}), 201
     return jsonify({'error': 'Failed to start'}), 400
@@ -1175,13 +1454,15 @@ def list_files():
 def get_modes():
     return jsonify({
         'modes': [
-            {'id': 'nft', 'name': 'NFT Tracer', 
+            {'id': 'nft', 'name': 'NFT Tracer',
              'description': 'Trace nftables rules và verdicts'},
-            {'id': 'universal', 'name': 'Universal Tracer', 
+            {'id': 'universal', 'name': 'Universal Tracer',
              'description': 'Trace đường đi packet qua kernel functions'},
-            {'id': 'full', 'name': 'Full Tracer (Recommended)', 
+            {'id': 'full', 'name': 'Full Tracer (Recommended)',
              'description': 'Trace ĐẦY ĐỦ: đường đi + verdict cuối cùng',
-             'recommended': True}
+             'recommended': True},
+            {'id': 'multifunction', 'name': 'Multi-Function Tracer',
+             'description': 'Trace nhiều functions với layer & hook statistics'}
         ]
     })
 
@@ -1457,6 +1738,150 @@ def get_packet_detail(filename, packet_index):
         return jsonify({'error': 'Packet not found'}), 404
 
     return jsonify(packet_detail)
+
+# ============================================================================
+# NFTABLES MANAGEMENT ROUTES
+# ============================================================================
+
+@app.route('/api/nft/health', methods=['GET'])
+def nft_health():
+    """Check if nftables is available"""
+    available, message = NFTablesManager.check_nft_available()
+    return jsonify({
+        'available': available,
+        'message': message
+    })
+
+@app.route('/api/nft/rules', methods=['GET'])
+def get_nft_rules():
+    """Get complete nftables ruleset"""
+    success, ruleset, error = NFTablesManager.get_ruleset()
+
+    if not success:
+        return jsonify({'error': error}), 500
+
+    # Parse ruleset into tree structure for easier frontend consumption
+    tree = NFTablesManager.parse_ruleset_to_tree(ruleset)
+
+    return jsonify({
+        'success': True,
+        'raw_ruleset': ruleset,
+        'tree': tree
+    })
+
+@app.route('/api/nft/tables', methods=['GET'])
+def get_nft_tables():
+    """Get list of all nftables tables"""
+    success, tables, error = NFTablesManager.get_tables()
+
+    if not success:
+        return jsonify({'error': error}), 500
+
+    return jsonify({
+        'success': True,
+        'tables': tables
+    })
+
+@app.route('/api/nft/chains/<family>/<table>', methods=['GET'])
+def get_nft_chains(family, table):
+    """Get chains for a specific table"""
+    success, chains, error = NFTablesManager.get_chains(family, table)
+
+    if not success:
+        return jsonify({'error': error}), 500
+
+    return jsonify({
+        'success': True,
+        'chains': chains
+    })
+
+@app.route('/api/nft/rule/add', methods=['POST'])
+def add_nft_rule():
+    """Add a new nftables rule"""
+    data = request.get_json()
+
+    family = data.get('family')
+    table = data.get('table')
+    chain = data.get('chain')
+    rule_text = data.get('rule_text')
+
+    if not all([family, table, chain, rule_text]):
+        return jsonify({
+            'success': False,
+            'error': 'Missing required parameters: family, table, chain, rule_text'
+        }), 400
+
+    success, error = NFTablesManager.add_rule(family, table, chain, rule_text)
+
+    if not success:
+        return jsonify({
+            'success': False,
+            'error': error
+        }), 500
+
+    return jsonify({
+        'success': True,
+        'message': 'Rule added successfully'
+    })
+
+@app.route('/api/nft/rule/delete', methods=['POST'])
+def delete_nft_rule():
+    """Delete an nftables rule by handle"""
+    data = request.get_json()
+
+    family = data.get('family')
+    table = data.get('table')
+    chain = data.get('chain')
+    handle = data.get('handle')
+
+    if not all([family, table, chain]) or handle is None:
+        return jsonify({
+            'success': False,
+            'error': 'Missing required parameters: family, table, chain, handle'
+        }), 400
+
+    success, error = NFTablesManager.delete_rule(family, table, chain, handle)
+
+    if not success:
+        return jsonify({
+            'success': False,
+            'error': error
+        }), 500
+
+    return jsonify({
+        'success': True,
+        'message': 'Rule deleted successfully'
+    })
+
+@app.route('/api/nft/rule/update', methods=['POST'])
+def update_nft_rule():
+    """Update an nftables rule (delete + add)"""
+    data = request.get_json()
+
+    family = data.get('family')
+    table = data.get('table')
+    chain = data.get('chain')
+    handle = data.get('handle')
+    new_rule_text = data.get('new_rule_text')
+
+    if not all([family, table, chain, new_rule_text]) or handle is None:
+        return jsonify({
+            'success': False,
+            'error': 'Missing required parameters: family, table, chain, handle, new_rule_text'
+        }), 400
+
+    success, error = NFTablesManager.update_rule(family, table, chain, handle, new_rule_text)
+
+    if not success:
+        return jsonify({
+            'success': False,
+            'error': error
+        }), 500
+
+    return jsonify({
+        'success': True,
+        'message': 'Rule updated successfully'
+    })
 
 # ============================================================================
 # MAIN
