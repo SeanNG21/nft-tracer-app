@@ -59,6 +59,12 @@ struct trace_event {
 BPF_PERF_OUTPUT(events);
 BPF_HASH(skb_info_map, u64, struct trace_event, 10240);
 BPF_HASH(depth_map, u64, u8, 10240);
+// Hook state map: stores current hook for each SKB
+struct hook_state {
+    u8 hook;
+    u8 pf;
+};
+BPF_HASH(hook_map, u64, struct hook_state, 10240);
 
 // Helper: decode verdict
 static __always_inline u32 decode_verdict(s32 raw_ret, u32 raw_u32)
@@ -214,6 +220,15 @@ int trace_skb_func(struct pt_regs *ctx, struct sk_buff *skb)
 
     extract_packet_info_from_skb(skb, &evt);
     read_comm_safe(evt.comm, sizeof(evt.comm));
+
+    // FIX: Read hook value from hook_map if available
+    if (evt.skb_addr != 0) {
+        struct hook_state *hs = hook_map.lookup(&evt.skb_addr);
+        if (hs) {
+            evt.hook = hs->hook;
+            evt.pf = hs->pf;
+        }
+    }
 
     // FILTER: Skip packets from/to app ports (3000=frontend, 5000=backend) to avoid loops
     if (evt.src_port == 3000 || evt.dst_port == 3000 ||
@@ -394,10 +409,32 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
     return 0;
 }
 
+// Kprobe: Capture hook value when nf_hook_slow is called
+int kprobe__nf_hook_slow(struct pt_regs *ctx)
+{
+    void *skb = (void *)PT_REGS_PARM1(ctx);
+    void *state = (void *)PT_REGS_PARM2(ctx);
+
+    if (!skb || !state)
+        return 0;
+
+    u64 skb_addr = (u64)skb;
+
+    // Extract hook and pf from nf_hook_state
+    struct hook_state hs = {};
+    bpf_probe_read_kernel(&hs.hook, sizeof(hs.hook), state);          // offset 0
+    bpf_probe_read_kernel(&hs.pf, sizeof(hs.pf), (char *)state + 1);  // offset 1
+
+    // Store hook state for this SKB
+    hook_map.update(&skb_addr, &hs);
+
+    return 0;
+}
+
 int kretprobe__nf_hook_slow(struct pt_regs *ctx)
 {
     u64 tid = bpf_get_current_pid_tgid();
-    
+
     u64 rax_u64 = PT_REGS_RC(ctx);
     s32 rax_s32 = (s32)rax_u64;
     u32 rax_u32 = (u32)rax_u64;

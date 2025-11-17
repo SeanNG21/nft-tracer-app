@@ -1112,11 +1112,13 @@ class TraceSession:
         
         print("[*] Attaching NFT hooks...")
         try:
+            # FIX: Attach kprobe for nf_hook_slow to capture hook value
+            self.bpf_full.attach_kprobe(event="nf_hook_slow", fn_name="kprobe__nf_hook_slow")
+            self.bpf_full.attach_kretprobe(event="nf_hook_slow", fn_name="kretprobe__nf_hook_slow")
             self.bpf_full.attach_kprobe(event="nft_do_chain", fn_name="kprobe__nft_do_chain")
             self.bpf_full.attach_kretprobe(event="nft_do_chain", fn_name="kretprobe__nft_do_chain")
             self.bpf_full.attach_kprobe(event="nft_immediate_eval", fn_name="kprobe__nft_immediate_eval")
-            self.bpf_full.attach_kretprobe(event="nf_hook_slow", fn_name="kretprobe__nf_hook_slow")
-            print("[✓] NFT hooks attached")
+            print("[✓] NFT hooks attached (including nf_hook_slow kprobe for hook tracking)")
         except Exception as e:
             print(f"[!] Warning: NFT hooks failed - {e}")
         
