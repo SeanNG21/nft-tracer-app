@@ -1091,9 +1091,15 @@ class RealtimeTracer:
         if not self.load_bpf():
             return False
         
-        self.bpf["events"].open_perf_buffer(self.handle_event)
+        # CRITICAL FIX: Increase buffer size to prevent sample loss
+        # Default: 8 pages = 32KB (too small for high traffic)
+        # New: 512 pages = 2MB (can handle burst traffic)
+        self.bpf["events"].open_perf_buffer(
+            self.handle_event,
+            page_cnt=512  # 512 * 4KB = 2MB buffer
+        )
         self.running = True
-        
+
         self.poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
         self.poll_thread.start()
         
@@ -1104,10 +1110,12 @@ class RealtimeTracer:
         return True
     
     def _poll_loop(self):
-        """Poll eBPF perf buffer"""
+        """Poll eBPF perf buffer - poll frequently to avoid buffer overflow"""
         while self.running:
             try:
-                self.bpf.perf_buffer_poll(timeout=100)
+                # CRITICAL FIX: Poll every 10ms instead of 100ms
+                # Faster polling = less chance of buffer overflow
+                self.bpf.perf_buffer_poll(timeout=10)
             except Exception as e:
                 if self.running:
                     print(f"[!] Poll error: {e}")

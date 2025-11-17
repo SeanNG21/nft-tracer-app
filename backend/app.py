@@ -905,7 +905,11 @@ class TraceSession:
         self.bpf_nft.attach_kretprobe(event="nft_do_chain", fn_name="kretprobe__nft_do_chain")
         self.bpf_nft.attach_kprobe(event="nft_immediate_eval", fn_name="kprobe__nft_immediate_eval")
         self.bpf_nft.attach_kretprobe(event="nf_hook_slow", fn_name="kretprobe__nf_hook_slow")
-        self.bpf_nft["events"].open_perf_buffer(self._handle_nft_event)
+        # CRITICAL FIX: Increase buffer to 2MB to prevent sample loss
+        self.bpf_nft["events"].open_perf_buffer(
+            self._handle_nft_event,
+            page_cnt=512  # 512 * 4KB = 2MB buffer
+        )
         self.running = True
         self.thread = threading.Thread(target=self._poll_nft_events)
         self.thread.daemon = True
@@ -1004,8 +1008,12 @@ class TraceSession:
             if count > 0:
                 print(f"    • {layer:12s}: {count:2d} functions")
         
-        self.bpf_full["events"].open_perf_buffer(self._handle_full_event)
-        
+        # CRITICAL FIX: Increase buffer to 2MB to prevent sample loss
+        self.bpf_full["events"].open_perf_buffer(
+            self._handle_full_event,
+            page_cnt=512  # 512 * 4KB = 2MB buffer
+        )
+
         self.running = True
         self.thread = threading.Thread(target=self._poll_full_events)
         self.thread.daemon = True
@@ -1046,7 +1054,11 @@ class TraceSession:
         print(f"[✓] Attached {attached}/{len(self.functions)} functions")
         
         if self.mode == 'universal':
-            self.bpf_universal["events"].open_perf_buffer(self._handle_universal_event)
+            # CRITICAL FIX: Increase buffer to 2MB to prevent sample loss
+            self.bpf_universal["events"].open_perf_buffer(
+                self._handle_universal_event,
+                page_cnt=512  # 512 * 4KB = 2MB buffer
+            )
             self.running = True
             self.thread = threading.Thread(target=self._poll_universal_events)
             self.thread.daemon = True
@@ -1215,36 +1227,44 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
         return output_path
     
     def _poll_nft_events(self):
+        """Poll NFT events - poll frequently to prevent buffer overflow"""
         while self.running:
             try:
-                self.bpf_nft.perf_buffer_poll(timeout=100)
+                # CRITICAL FIX: Poll every 10ms (was 100ms) to prevent sample loss
+                self.bpf_nft.perf_buffer_poll(timeout=10)
             except Exception as e:
                 if self.running:
                     print(f"[ERROR] NFT polling: {e}")
                 break
     
     def _poll_universal_events(self):
+        """Poll universal events - poll frequently to prevent buffer overflow"""
         while self.running:
             try:
-                self.bpf_universal.perf_buffer_poll(timeout=100)
+                # CRITICAL FIX: Poll every 10ms (was 100ms) to prevent sample loss
+                self.bpf_universal.perf_buffer_poll(timeout=10)
             except Exception as e:
                 if self.running:
                     print(f"[ERROR] Universal polling: {e}")
                 break
     
     def _poll_full_events(self):
+        """Poll full mode events - poll frequently to prevent buffer overflow"""
         while self.running:
             try:
-                self.bpf_full.perf_buffer_poll(timeout=100)
+                # CRITICAL FIX: Poll every 10ms (was 100ms) to prevent sample loss
+                self.bpf_full.perf_buffer_poll(timeout=10)
             except Exception as e:
                 if self.running:
                     print(f"[ERROR] FULL mode polling: {e}")
                 break
 
     def _poll_multifunction_events(self):
+        """Poll multifunction events - poll frequently to prevent buffer overflow"""
         while self.running:
             try:
-                self.bpf_multifunction.perf_buffer_poll(timeout=100)
+                # CRITICAL FIX: Poll every 10ms (was 100ms) to prevent sample loss
+                self.bpf_multifunction.perf_buffer_poll(timeout=10)
             except Exception as e:
                 if self.running:
                     print(f"[ERROR] MULTIFUNCTION mode polling: {e}")
