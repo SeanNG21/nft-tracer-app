@@ -139,6 +139,8 @@ FUNCTION_TO_LAYER = {
     'nf_hook_slow': 'Netfilter',
     'nf_hook_thresh': 'Netfilter',
     'nf_reinject': 'Netfilter',
+    'nft_do_chain': 'Netfilter',
+    'nft_immediate_eval': 'Netfilter',
 
     # Conntrack
     'nf_conntrack_in': 'Conntrack',

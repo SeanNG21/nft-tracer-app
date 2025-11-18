@@ -370,7 +370,7 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
 
     s32 verdict_code = 0;
     bpf_probe_read_kernel(&verdict_code, sizeof(verdict_code), (char *)expr + 8);
-    
+
     u64 rule_handle = extract_rule_handle(expr);
 
     struct trace_event evt = {};
@@ -378,7 +378,7 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
     evt.cpu_id = bpf_get_smp_processor_id();
     evt.pid = (u32)(tid >> 32);
     evt.event_type = EVENT_TYPE_NFT_RULE;
-    
+
     evt.skb_addr = stored->skb_addr;
     evt.chain_addr = stored->chain_addr;
     evt.expr_addr = (u64)expr;
@@ -387,14 +387,14 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
     evt.chain_depth = stored->chain_depth;
     evt.rule_seq = stored->rule_seq;
     evt.rule_handle = rule_handle;
-    
+
     evt.protocol = stored->protocol;
     evt.src_ip = stored->src_ip;
     evt.dst_ip = stored->dst_ip;
     evt.src_port = stored->src_port;
     evt.dst_port = stored->dst_port;
     evt.length = stored->length;
-    
+
     evt.verdict_raw = verdict_code;
     evt.verdict = decode_verdict(verdict_code, (u32)verdict_code);
 
@@ -402,6 +402,10 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
         evt.queue_num = ((u32)verdict_code >> 16) & 0xFFFFu;
         evt.has_queue_bypass = (((u32)verdict_code & 0x8000u) ? 1 : 0);
     }
+
+    // CRITICAL FIX: Set func_ip so Python backend can identify this as nft_immediate_eval
+    // This ensures verdict is counted correctly for the Netfilter hook
+    evt.func_ip = PT_REGS_IP(ctx);
 
     read_comm_safe(evt.comm, sizeof(evt.comm));
     events.perf_submit(ctx, &evt, sizeof(evt));
