@@ -111,6 +111,24 @@ out/
 *.local
 
 #######################
+# NFT TRACER SPECIFIC
+#######################
+
+# Environment-specific databases
+backend/nft_tracer_dev.db
+backend/nft_tracer_test.db
+backend/nft_tracer_staging.db
+
+# Log directory
+logs/
+
+# Test results
+test-results/
+
+# Docker volumes
+docker-volumes/
+
+#######################
 # OS FILES
 #######################
 Thumbs.db

@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: ${BUILD_TARGET:-development}
+    container_name: nft-tracer-backend-${ENV:-dev}
+    ports:
+      - "${BACKEND_PORT:-5000}:5000"
+    volumes:
+      - ./backend:/app/backend
+      - ./logs:/app/logs
+    environment:
+      - FLASK_ENV=${FLASK_ENV:-development}
+      - FLASK_DEBUG=${FLASK_DEBUG:-True}
+      - BACKEND_PORT=${BACKEND_PORT:-5000}
+      - DATABASE_PATH=${DATABASE_PATH:-./nft_tracer.db}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ENABLE_EBPF=${ENABLE_EBPF:-True}
+      - ENABLE_REALTIME=${ENABLE_REALTIME:-True}
+    privileged: true
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      target: ${BUILD_TARGET:-development}
+    container_name: nft-tracer-frontend-${ENV:-dev}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    volumes:
+      - ./frontend:/app/frontend
+      - /app/frontend/node_modules
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:5000}
+      - REACT_APP_SOCKET_URL=${REACT_APP_SOCKET_URL:-http://localhost:5000}
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: nft-tracer-redis-${ENV:-dev}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+volumes:
+  redis-data:

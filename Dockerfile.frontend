@@ -1,0 +1,37 @@
+# Multi-stage Dockerfile for NFT Tracer Frontend
+
+FROM node:18-alpine as base
+
+WORKDIR /app/frontend
+
+# Copy package files
+COPY frontend/package*.json ./
+
+# Development stage
+FROM base as development
+ENV NODE_ENV=development
+RUN npm install
+COPY frontend/ .
+EXPOSE 3000
+CMD ["npm", "start"]
+
+# Testing stage
+FROM base as testing
+ENV NODE_ENV=test
+ENV CI=true
+RUN npm install
+COPY frontend/ .
+CMD ["npm", "test", "--", "--watchAll=false", "--coverage"]
+
+# Build stage for staging/production
+FROM base as builder
+RUN npm ci --only=production
+COPY frontend/ .
+RUN npm run build
+
+# Staging/Production stage with nginx
+FROM nginx:alpine as staging
+COPY --from=builder /app/frontend/build /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

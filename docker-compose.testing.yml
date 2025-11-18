@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  backend-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: testing
+    container_name: nft-tracer-backend-test
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./backend:/app/backend
+      - ./logs:/app/logs
+      - ./test-results:/app/test-results
+    environment:
+      - FLASK_ENV=testing
+      - FLASK_DEBUG=False
+      - BACKEND_PORT=5001
+      - DATABASE_PATH=./nft_tracer_test.db
+      - LOG_LEVEL=WARNING
+      - ENABLE_EBPF=False
+      - MOCK_EBPF=True
+      - RUN_INTEGRATION_TESTS=True
+    network_mode: host
+
+  frontend-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      target: testing
+    container_name: nft-tracer-frontend-test
+    volumes:
+      - ./frontend:/app/frontend
+      - /app/frontend/node_modules
+      - ./test-results:/app/test-results
+    environment:
+      - NODE_ENV=test
+      - CI=true
+      - REACT_APP_API_URL=http://localhost:5001
+      - REACT_APP_SOCKET_URL=http://localhost:5001
+
+  redis-test:
+    image: redis:7-alpine
+    container_name: nft-tracer-redis-test
+    ports:
+      - "6380:6379"
+    tmpfs:
+      - /data

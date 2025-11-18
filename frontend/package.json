@@ -15,8 +15,16 @@
   },
   "scripts": {
     "start": "react-scripts start",
+    "start:dev": "env-cmd -f ../.env.development react-scripts start",
+    "start:test": "env-cmd -f ../.env.testing react-scripts start",
+    "start:staging": "env-cmd -f ../.env.staging react-scripts start",
     "build": "react-scripts build",
+    "build:dev": "env-cmd -f ../.env.development react-scripts build",
+    "build:test": "env-cmd -f ../.env.testing react-scripts build",
+    "build:staging": "env-cmd -f ../.env.staging react-scripts build",
     "test": "react-scripts test",
+    "test:ci": "CI=true react-scripts test --watchAll=false --coverage",
+    "test:coverage": "npm test -- --coverage --watchAll=false",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {

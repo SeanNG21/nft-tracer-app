@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  backend-staging:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: staging
+    container_name: nft-tracer-backend-staging
+    ports:
+      - "5000:5000"
+      - "9090:9090"  # Metrics port
+    volumes:
+      - ./logs:/app/logs
+      - staging-data:/app/data
+    environment:
+      - FLASK_ENV=production
+      - FLASK_DEBUG=False
+      - BACKEND_PORT=5000
+      - DATABASE_PATH=/app/data/nft_tracer_staging.db
+      - LOG_LEVEL=INFO
+      - ENABLE_EBPF=True
+      - ENABLE_REALTIME=True
+      - ENABLE_METRICS=True
+      - SECRET_KEY=${SECRET_KEY}
+      - CORS_ORIGINS=${CORS_ORIGINS}
+    privileged: true
+    network_mode: host
+    restart: always
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import requests; requests.get('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      - redis-staging
+
+  frontend-staging:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      target: staging
+    container_name: nft-tracer-frontend-staging
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      - backend-staging
+    restart: always
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis-staging:
+    image: redis:7-alpine
+    container_name: nft-tracer-redis-staging
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-staging-data:/data
+    restart: always
+    command: redis-server --appendonly yes
+
+volumes:
+  staging-data:
+  redis-staging-data:
