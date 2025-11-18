@@ -2253,14 +2253,23 @@ class RealtimeExtension:
                     try:
                         global_stats = self.tracer.stats.get_summary()
 
+                        # CRITICAL FIX: Add mode='full' so frontend knows to show Enhanced Pipeline Flow
+                        # Frontend checks: stats.mode === 'full' && stats.nodes
+                        # Note: We add mode per session to avoid mutating shared stats dict
+
                         if iteration <= 3:
-                            print(f"[DEBUG] Emitting GLOBAL stats to full mode sessions: total_packets={global_stats.get('total_packets', 0)}")
+                            print(f"[DEBUG] Emitting GLOBAL stats to full mode sessions: total_packets={global_stats.get('total_packets', 0)}, nodes={len(global_stats.get('nodes', {}))}")
 
                         # Emit to each full mode session room
                         for session_id in list(self.full_mode_sessions):
+                            # Create session-specific stats dict with mode field
+                            session_stats = global_stats.copy()
+                            session_stats['mode'] = 'full'
+                            session_stats['session_id'] = session_id
+
                             self.socketio.emit('session_stats_update', {
                                 'session_id': session_id,
-                                'stats': global_stats
+                                'stats': session_stats
                             }, room=f"session_{session_id}")
                     except Exception as e:
                         print(f"[Error] Failed to emit global stats to full mode sessions: {e}")
