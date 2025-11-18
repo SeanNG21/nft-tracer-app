@@ -2257,7 +2257,23 @@ class TraceAnalyzer:
                 # Check final verdict
                 if trace.get('final_verdict') == verdict:
                     return True
-                # Check important_events for intermediate verdicts
+
+                # Check nft_events for intermediate verdicts (new format)
+                nft_events = trace.get('nft_events', [])
+                for event in nft_events:
+                    event_verdict = event.get('verdict')
+                    if event_verdict:
+                        if isinstance(event_verdict, str) and event_verdict.upper() == verdict:
+                            return True
+                        elif isinstance(event_verdict, int):
+                            # Map verdict codes to names
+                            verdict_map = {0: 'DROP', 1: 'ACCEPT', 2: 'STOLEN',
+                                          3: 'QUEUE', 4: 'REPEAT', 5: 'STOP',
+                                          -1: 'JUMP', -2: 'GOTO', -3: 'RETURN'}
+                            if verdict_map.get(event_verdict, '').upper() == verdict:
+                                return True
+
+                # Check important_events for intermediate verdicts (old format compatibility)
                 events = trace.get('important_events', [])
                 for event in events:
                     # Check verdict in different event types
@@ -2326,33 +2342,78 @@ class TraceAnalyzer:
             'flow_summary': []
         }
 
-        # Analyze verdict changes
-        events = packet.get('important_events', [])
-        for event in events:
+        # Verdict code mapping
+        verdict_map = {
+            0: 'DROP', 1: 'ACCEPT', 2: 'STOLEN',
+            3: 'QUEUE', 4: 'REPEAT', 5: 'STOP',
+            -1: 'JUMP', -2: 'GOTO', -3: 'RETURN'
+        }
+
+        # Analyze verdict changes from nft_events (new format)
+        nft_events = packet.get('nft_events', [])
+        for event in nft_events:
             trace_type = event.get('trace_type')
 
-            if trace_type in ['chain_exit', 'hook_exit']:
+            if trace_type in ['chain_exit', 'hook_exit', 'rule_eval']:
+                # Get verdict as string
+                verdict_str = event.get('verdict')
+                if isinstance(verdict_str, int):
+                    verdict_str = verdict_map.get(verdict_str, f'UNKNOWN({verdict_str})')
+
                 verdict_info = {
                     'timestamp': event.get('timestamp'),
                     'type': trace_type,
-                    'verdict': event.get('verdict_str'),
-                    'hook': event.get('hook_name'),
-                    'chain': event.get('chain_name'),
-                    'table': event.get('table_name')
+                    'verdict': verdict_str,
+                    'hook': event.get('hook'),
+                    'hook_name': f'HOOK_{event.get("hook")}' if event.get('hook') is not None else None,
+                    'chain_addr': event.get('chain_addr'),
+                    'chain_depth': event.get('chain_depth'),
+                    'pf': event.get('pf')
                 }
+
+                # Add rule info for rule_eval events
+                if trace_type == 'rule_eval':
+                    verdict_info['rule_handle'] = event.get('rule_handle')
+                    verdict_info['rule_seq'] = event.get('rule_seq')
+
                 analysis['verdict_chain'].append(verdict_info)
 
                 # Check for JUMP/GOTO
-                if event.get('verdict_str') in ['JUMP', 'GOTO']:
+                if verdict_str in ['JUMP', 'GOTO']:
                     analysis['jump_goto_chain'].append({
-                        'source_chain': event.get('chain_name'),
-                        'target_chain': event.get('target_chain'),
-                        'verdict_type': event.get('verdict_str')
+                        'source_chain': event.get('chain_addr'),
+                        'target_chain': None,  # Not available in new format
+                        'verdict_type': verdict_str
                     })
 
-            elif trace_type == 'rule_eval':
-                # Track rule evaluation
-                pass
+        # Fallback: Analyze verdict changes from important_events (old format compatibility)
+        if not nft_events:
+            events = packet.get('important_events', [])
+            for event in events:
+                trace_type = event.get('trace_type')
+
+                if trace_type in ['chain_exit', 'hook_exit']:
+                    verdict_info = {
+                        'timestamp': event.get('timestamp'),
+                        'type': trace_type,
+                        'verdict': event.get('verdict_str'),
+                        'hook': event.get('hook_name'),
+                        'chain': event.get('chain_name'),
+                        'table': event.get('table_name')
+                    }
+                    analysis['verdict_chain'].append(verdict_info)
+
+                    # Check for JUMP/GOTO
+                    if event.get('verdict_str') in ['JUMP', 'GOTO']:
+                        analysis['jump_goto_chain'].append({
+                            'source_chain': event.get('chain_name'),
+                            'target_chain': event.get('target_chain'),
+                            'verdict_type': event.get('verdict_str')
+                        })
+
+                elif trace_type == 'rule_eval':
+                    # Track rule evaluation
+                    pass
 
         # Determine drop reason
         final_verdict = packet.get('final_verdict')

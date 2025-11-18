@@ -132,9 +132,15 @@ const PacketDetail = ({ packet, onClose }) => {
           </span>
         </div>
         <div className="info-item">
-          <label>All Events</label>
-          <span>{packet.all_events_count}</span>
+          <label>Function Events</label>
+          <span>{packet.all_events_count || (packet.events ? packet.events.length : 0)}</span>
         </div>
+        {packet.nft_events && packet.nft_events.length > 0 && (
+          <div className="info-item">
+            <label>NFT Events</label>
+            <span className="highlight-nft">{packet.nft_events_count || packet.nft_events.length}</span>
+          </div>
+        )}
       </div>
 
       {/* Layer Counts Section */}
@@ -263,7 +269,7 @@ const PacketDetail = ({ packet, onClose }) => {
     </div>
   );
 
-  // Render all events
+  // Render all events (function calls)
   const renderEvents = () => {
     // Support both old format (all_events) and new format (events)
     const eventsList = packet.events || packet.all_events || [];
@@ -271,7 +277,7 @@ const PacketDetail = ({ packet, onClose }) => {
 
     return (
       <div className="detail-section">
-        <h4>All Events ({eventsCount})</h4>
+        <h4>Function Call Events ({eventsCount})</h4>
         <div className="events-list">
           {eventsList.length > 0 ? (
             eventsList.map((event, idx) => (
@@ -302,45 +308,81 @@ const PacketDetail = ({ packet, onClose }) => {
                     {event.comm && <span><strong>Comm:</strong> {event.comm}</span>}
                   </>
                 )}
-                {event.trace_type === 'chain_exit' && (
-                  <>
-                    <span><strong>Verdict:</strong> {event.verdict || event.verdict_str || 'N/A'}</span>
-                    <span><strong>Verdict Code:</strong> {event.verdict_code ?? 'N/A'}</span>
-                    {event.chain_depth !== undefined && <span><strong>Chain Depth:</strong> {event.chain_depth}</span>}
-                    {event.chain_addr && <span><strong>Chain Addr:</strong> {event.chain_addr}</span>}
-                    {event.hook !== undefined && <span><strong>Hook:</strong> {event.hook}</span>}
-                    <span><strong>CPU:</strong> {event.cpu_id}</span>
-                    {event.comm && <span><strong>Comm:</strong> {event.comm}</span>}
-                  </>
-                )}
-                {event.trace_type === 'hook_exit' && (
-                  <>
-                    <span><strong>Verdict:</strong> {event.verdict || event.verdict_str || 'N/A'}</span>
-                    {event.hook !== undefined && <span><strong>Hook:</strong> {event.hook}</span>}
-                    <span><strong>CPU:</strong> {event.cpu_id}</span>
-                    {event.comm && <span><strong>Comm:</strong> {event.comm}</span>}
-                  </>
-                )}
-                {event.trace_type === 'rule_eval' && (
-                  <>
-                    <span><strong>Rule Seq:</strong> {event.rule_seq ?? 'N/A'}</span>
-                    <span><strong>Rule Handle:</strong> {event.rule_handle ?? event.rule_id ?? 'N/A'}</span>
-                    {event.verdict && <span><strong>Verdict:</strong> {event.verdict}</span>}
-                    <span><strong>Verdict Code:</strong> {event.verdict_code ?? 'N/A'}</span>
-                    {event.chain_depth !== undefined && <span><strong>Chain Depth:</strong> {event.chain_depth}</span>}
-                    {event.hook !== undefined && <span><strong>Hook:</strong> {event.hook}</span>}
-                    <span><strong>CPU:</strong> {event.cpu_id}</span>
-                    {event.comm && <span><strong>Comm:</strong> {event.comm}</span>}
-                  </>
-                )}
               </div>
             </div>
           ))
         ) : (
-          <p className="no-data">No events recorded</p>
+          <p className="no-data">No function call events recorded</p>
         )}
       </div>
     </div>
+    );
+  };
+
+  // Render NFT Events (nftables trace events)
+  const renderNFTEvents = () => {
+    const nftEventsList = packet.nft_events || [];
+    const nftEventsCount = packet.nft_events_count || nftEventsList.length || 0;
+
+    // Verdict code mapping
+    const verdictMap = {
+      0: 'DROP', 1: 'ACCEPT', 2: 'STOLEN',
+      3: 'QUEUE', 4: 'REPEAT', 5: 'STOP',
+      '-1': 'JUMP', '-2': 'GOTO', '-3': 'RETURN'
+    };
+
+    // Hook mapping
+    const hookMap = {
+      0: 'PREROUTING',
+      1: 'INPUT',
+      2: 'FORWARD',
+      3: 'OUTPUT',
+      4: 'POSTROUTING'
+    };
+
+    const getVerdictStr = (verdict) => {
+      if (typeof verdict === 'string') return verdict;
+      if (typeof verdict === 'number') return verdictMap[verdict] || `UNKNOWN(${verdict})`;
+      return 'N/A';
+    };
+
+    const getHookStr = (hook) => {
+      if (hook === undefined || hook === null) return 'N/A';
+      return hookMap[hook] || `HOOK_${hook}`;
+    };
+
+    return (
+      <div className="detail-section">
+        <h4>NFTables Trace Events ({nftEventsCount})</h4>
+        <div className="events-list">
+          {nftEventsList.length > 0 ? (
+            nftEventsList.map((event, idx) => (
+              <div key={idx} className={`event-item event-${event.trace_type || 'nft_event'}`}>
+                <div className="event-header">
+                  <span className="event-type badge">{event.trace_type || 'nft_event'}</span>
+                  <span className="event-time">{formatTimestamp(event.timestamp)}</span>
+                </div>
+                <div className="event-details">
+                  <span><strong>Verdict:</strong> <span className={`verdict verdict-${getVerdictStr(event.verdict).toLowerCase()}`}>{getVerdictStr(event.verdict)}</span></span>
+                  <span><strong>Verdict Code:</strong> {event.verdict_code ?? 'N/A'}</span>
+                  {event.verdict_raw !== undefined && <span><strong>Verdict Raw:</strong> {event.verdict_raw}</span>}
+                  {event.hook !== undefined && <span><strong>Hook:</strong> {getHookStr(event.hook)}</span>}
+                  {event.pf !== undefined && <span><strong>Protocol Family:</strong> {event.pf}</span>}
+                  {event.chain_depth !== undefined && <span><strong>Chain Depth:</strong> {event.chain_depth}</span>}
+                  {event.chain_addr && <span><strong>Chain Addr:</strong> {event.chain_addr}</span>}
+                  {event.rule_seq !== undefined && event.rule_seq !== 0 && <span><strong>Rule Seq:</strong> {event.rule_seq}</span>}
+                  {event.rule_handle !== undefined && event.rule_handle !== 0 && <span><strong>Rule Handle:</strong> {event.rule_handle}</span>}
+                  {event.expr_addr && <span><strong>Expression Addr:</strong> {event.expr_addr}</span>}
+                  <span><strong>CPU:</strong> {event.cpu_id}</span>
+                  {event.comm && <span><strong>Comm:</strong> {event.comm}</span>}
+                </div>
+              </div>
+            ))
+          ) : (
+            <p className="no-data">No NFTables trace events recorded</p>
+          )}
+        </div>
+      </div>
     );
   };
 
@@ -370,7 +412,19 @@ const PacketDetail = ({ packet, onClose }) => {
           className={`tab ${activeTab === 'events' ? 'active' : ''}`}
           onClick={() => setActiveTab('events')}
         >
-          All Events
+          Function Events
+          {packet.events && packet.events.length > 0 && (
+            <span className="tab-badge">{packet.events.length}</span>
+          )}
+        </button>
+        <button
+          className={`tab ${activeTab === 'nft_events' ? 'active' : ''}`}
+          onClick={() => setActiveTab('nft_events')}
+        >
+          NFT Events
+          {packet.nft_events && packet.nft_events.length > 0 && (
+            <span className="tab-badge">{packet.nft_events.length}</span>
+          )}
         </button>
       </div>
 
@@ -380,6 +434,7 @@ const PacketDetail = ({ packet, onClose }) => {
         {activeTab === 'functions' && renderFunctionFlow()}
         {activeTab === 'verdict' && renderVerdictChain()}
         {activeTab === 'events' && renderEvents()}
+        {activeTab === 'nft_events' && renderNFTEvents()}
       </div>
     </div>
   );
