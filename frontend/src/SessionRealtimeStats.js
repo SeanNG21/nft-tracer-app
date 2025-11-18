@@ -4,11 +4,9 @@ import './Realtime.css';
 
 const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 'http://localhost:5000';
 
-// Hook order for pipeline
 const HOOK_ORDER = ['PRE_ROUTING', 'LOCAL_IN', 'FORWARD', 'LOCAL_OUT', 'POST_ROUTING'];
 const LAYER_ORDER = ['Ingress', 'L2', 'IP', 'Firewall', 'Socket', 'Egress'];
 
-// Hook icons
 const HOOK_ICONS = {
   'PRE_ROUTING': '⚙️',
   'LOCAL_IN': '📥',
@@ -17,7 +15,6 @@ const HOOK_ICONS = {
   'POST_ROUTING': '⚙️'
 };
 
-// NEW: Pipeline structure definitions for Enhanced Full Mode Visualization
 const PIPELINE_DEFINITIONS = {
   Inbound: {
     mainFlow: [
@@ -55,17 +52,14 @@ const PIPELINE_DEFINITIONS = {
   ]
 };
 
-// Enhanced Pipeline Node Component
 function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
   const count = nodeData?.count || 0;
   const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
 
-  // Create gradient background based on stage color
   const gradientBg = isActive
     ? `linear-gradient(135deg, ${stageDef.color} 0%, ${stageDef.color}dd 100%)`
     : 'linear-gradient(135deg, #e0e0e0 0%, #c0c0c0 100%)';
 
-  // Verdict pie chart data for Netfilter nodes
   const verdictData = nodeData?.verdict || null;
   const isNetfilterNode = stageDef.name.includes('Netfilter');
 
@@ -81,18 +75,14 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
           border: `2px solid ${isActive ? stageDef.color : '#bbb'}`,
         }}
       >
-        {/* Icon */}
         <div className="node-icon">{stageDef.icon}</div>
 
-        {/* Name */}
         <div className="node-name">{stageDef.name}</div>
 
-        {/* Count */}
         {isActive && (
           <div className="node-count">{count.toLocaleString()}</div>
         )}
 
-        {/* Top Functions */}
         {isActive && nodeData?.top_functions && nodeData.top_functions.length > 0 && (
           <div className="node-functions">
             {nodeData.top_functions.slice(0, 2).map((func, idx) => (
@@ -104,14 +94,12 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
           </div>
         )}
 
-        {/* Latency */}
         {isActive && nodeData?.latency && nodeData.latency.p50 > 0 && (
           <div className="node-latency">
             ⏱️ p50: {nodeData.latency.p50.toFixed(1)}µs
           </div>
         )}
 
-        {/* Verdict for Netfilter nodes */}
         {isActive && isNetfilterNode && verdictData && (
           <div className="node-verdict">
             {Object.entries(verdictData).map(([verdict, vCount]) => {
@@ -125,7 +113,6 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
           </div>
         )}
 
-        {/* Tooltip (shows on hover) */}
         {isActive && (
           <div className="node-tooltip">
             <div className="tooltip-header">{stageDef.name}</div>
@@ -171,7 +158,6 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
   );
 }
 
-// Color based on drop rate
 function getDropRateColor(dropRate) {
   if (dropRate <= 1) {
     return { bg: 'rgba(40, 167, 69, 0.1)', border: '#28a745', text: '#28a745' };
@@ -182,18 +168,13 @@ function getDropRateColor(dropRate) {
   }
 }
 
-/**
- * SessionRealtimeStats - Realtime visualization cho 1 session cụ thể
- * Subscribe to WebSocket room: session_{sessionId}
- */
 function SessionRealtimeStats({ sessionId }) {
   const [connected, setConnected] = useState(false);
   const [stats, setStats] = useState(null);
   const [expandedHooks, setExpandedHooks] = useState(new Set());
-  
+
   const socketRef = useRef(null);
 
-  // Initialize Socket.IO connection
   useEffect(() => {
     console.log(`[SessionRealtime] Connecting for session: ${sessionId}`);
     
@@ -207,8 +188,7 @@ function SessionRealtimeStats({ sessionId }) {
     socket.on('connect', () => {
       console.log(`[SessionRealtime] Connected, joining room: session_${sessionId}`);
       setConnected(true);
-      
-      // Join session-specific room
+
       socket.emit('join_session', { session_id: sessionId });
     });
 
@@ -221,7 +201,6 @@ function SessionRealtimeStats({ sessionId }) {
       console.log('[SessionRealtime] Joined session room:', data);
     });
 
-    // Listen for session-specific stats updates
     socket.on('session_stats_update', (data) => {
       if (data.session_id === sessionId) {
         console.log('[SessionRealtime] Received stats for session:', data.stats);
@@ -250,7 +229,6 @@ function SessionRealtimeStats({ sessionId }) {
     });
   };
 
-  // Loading state
   if (!stats) {
     return (
       <div className="realtime-container">
@@ -268,7 +246,6 @@ function SessionRealtimeStats({ sessionId }) {
 
   return (
     <div className="realtime-container">
-      {/* Connection Status */}
       <div className="realtime-header">
         <div className="realtime-header-left">
           <h2>📊 Realtime Statistics - {sessionId}</h2>
@@ -279,7 +256,6 @@ function SessionRealtimeStats({ sessionId }) {
         </div>
       </div>
 
-      {/* Stats Cards */}
       <div className="realtime-stats-grid">
         <div className="realtime-stat-card primary">
           <div className="stat-icon">📦</div>
@@ -314,13 +290,11 @@ function SessionRealtimeStats({ sessionId }) {
         </div>
       </div>
 
-      {/* ENHANCED FULL MODE: Pipeline Flow Visualization with Detailed Metrics */}
       {stats.mode === 'full' && stats.nodes && Object.keys(stats.nodes).length > 0 && (
         <div className="realtime-panel full-width">
           <h3>🔄 Enhanced Packet Pipeline Flow</h3>
 
           <div className="pipeline-flow-container">
-            {/* Inbound Pipeline */}
             {(() => {
               const inboundNodes = PIPELINE_DEFINITIONS.Inbound.mainFlow.concat(
                 ...Object.values(PIPELINE_DEFINITIONS.Inbound.branches)
@@ -342,7 +316,6 @@ function SessionRealtimeStats({ sessionId }) {
                     </span>
                   </div>
 
-                  {/* Main Pipeline Flow */}
                   <div className="pipeline-main-flow">
                     <div className="pipeline-stages">
                       {PIPELINE_DEFINITIONS.Inbound.mainFlow.map((stageDef, index, arr) => {
@@ -368,9 +341,7 @@ function SessionRealtimeStats({ sessionId }) {
                     </div>
                   </div>
 
-                  {/* Branching Point */}
                   <div className="pipeline-branches">
-                    {/* Local Delivery Branch */}
                     <div className="pipeline-branch local">
                       <div className="branch-header">
                         <span className="branch-arrow">⤷</span>
@@ -400,7 +371,6 @@ function SessionRealtimeStats({ sessionId }) {
                       </div>
                     </div>
 
-                    {/* Forward Branch */}
                     <div className="pipeline-branch forward">
                       <div className="branch-header">
                         <span className="branch-arrow">⤷</span>
@@ -434,7 +404,6 @@ function SessionRealtimeStats({ sessionId }) {
               );
             })()}
 
-            {/* Outbound Pipeline */}
             {(() => {
               const outboundCounts = PIPELINE_DEFINITIONS.Outbound.map(s => stats.nodes[s.name]?.count || 0);
               const hasOutbound = outboundCounts.some(c => c > 0);
@@ -482,137 +451,14 @@ function SessionRealtimeStats({ sessionId }) {
         </div>
       )}
 
-      {/* Multifunction Stats Visualization */}
-      {stats.mode === 'multifunction' && (stats.stats_by_layer || stats.stats_by_hook || stats.stats_by_verdict) && (
-        <div className="multifunction-stats-container">
-          {/* Layer Statistics */}
-          {stats.stats_by_layer && Object.keys(stats.stats_by_layer).length > 0 && (
-            <div className="realtime-panel">
-              <h3>📊 Network Stack Layers</h3>
-              <div className="bar-chart">
-                {Object.entries(stats.stats_by_layer)
-                  .sort((a, b) => b[1] - a[1])
-                  .map(([layer, count]) => {
-                    const maxCount = Math.max(...Object.values(stats.stats_by_layer));
-                    const percentage = (count / maxCount) * 100;
-                    return (
-                      <div key={layer} className="bar-item">
-                        <div className="bar-label">{layer}</div>
-                        <div className="bar-visual">
-                          <div
-                            className="bar-fill"
-                            style={{
-                              width: `${percentage}%`,
-                              backgroundColor: '#1a73e8'
-                            }}
-                          >
-                            <span className="bar-value">{count.toLocaleString()}</span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
-            </div>
-          )}
-
-          {/* Hook Statistics */}
-          {stats.stats_by_hook && Object.keys(stats.stats_by_hook).length > 0 && (
-            <div className="realtime-panel">
-              <h3>🔄 Netfilter Hooks</h3>
-              <div className="bar-chart">
-                {Object.entries(stats.stats_by_hook)
-                  .sort((a, b) => {
-                    const hookOrder = ['PREROUTING', 'INPUT', 'FORWARD', 'OUTPUT', 'POSTROUTING'];
-                    return hookOrder.indexOf(a[0]) - hookOrder.indexOf(b[0]);
-                  })
-                  .map(([hook, count]) => {
-                    const maxCount = Math.max(...Object.values(stats.stats_by_hook));
-                    const percentage = (count / maxCount) * 100;
-                    const hookIcons = {
-                      'PREROUTING': '⚙️',
-                      'INPUT': '📥',
-                      'FORWARD': '↔️',
-                      'OUTPUT': '📤',
-                      'POSTROUTING': '⚙️'
-                    };
-                    return (
-                      <div key={hook} className="bar-item">
-                        <div className="bar-label">{hookIcons[hook] || ''} {hook}</div>
-                        <div className="bar-visual">
-                          <div
-                            className="bar-fill"
-                            style={{
-                              width: `${percentage}%`,
-                              backgroundColor: '#28a745'
-                            }}
-                          >
-                            <span className="bar-value">{count.toLocaleString()}</span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
-            </div>
-          )}
-
-          {/* Verdict Statistics */}
-          {stats.stats_by_verdict && Object.keys(stats.stats_by_verdict).length > 0 && (
-            <div className="realtime-panel">
-              <h3>⚖️ NFT Verdicts</h3>
-              <div className="bar-chart">
-                {Object.entries(stats.stats_by_verdict)
-                  .sort((a, b) => b[1] - a[1])
-                  .map(([verdict, count]) => {
-                    const maxCount = Math.max(...Object.values(stats.stats_by_verdict));
-                    const percentage = (count / maxCount) * 100;
-                    const verdictColors = {
-                      'ACCEPT': '#28a745',
-                      'DROP': '#dc3545',
-                      'STOLEN': '#ffc107',
-                      'QUEUE': '#17a2b8',
-                      'REPEAT': '#6c757d',
-                      'STOP': '#fd7e14'
-                    };
-                    return (
-                      <div key={verdict} className="bar-item">
-                        <div className="bar-label">{verdict}</div>
-                        <div className="bar-visual">
-                          <div
-                            className="bar-fill"
-                            style={{
-                              width: `${percentage}%`,
-                              backgroundColor: verdictColors[verdict] || '#6c757d'
-                            }}
-                          >
-                            <span className="bar-value">{count.toLocaleString()}</span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Hook Pipeline Graph - Only show for non-full modes */}
       {stats.mode !== 'full' && stats.hooks && Object.keys(stats.hooks).length > 0 ? (
         <div className="realtime-panel full-width">
           <h3>🔄 Packet Flow Pipeline</h3>
-          {stats.mode === 'multifunction' && (
-            <div className="multifunction-note">
-              ℹ️ Multi-Function Mode: Layers are auto-detected from traced kernel functions
-            </div>
-          )}
           <div className="hook-pipeline">
             {HOOK_ORDER.map((hookName, index) => {
               const hookData = stats.hooks[hookName];
               const isExpanded = expandedHooks.has(hookName);
 
-              // Hook not active
               if (!hookData || !hookData.packets_total || hookData.packets_total === 0) {
                 return (
                   <div key={hookName} className="hook-pipeline-item">
@@ -681,7 +527,6 @@ function SessionRealtimeStats({ sessionId }) {
                     <div className="hook-arrow active">→</div>
                   )}
 
-                  {/* Expanded Layers */}
                   {isExpanded && (
                     <div className="layers-container">
                       {Object.keys(layersData).length === 0 ? (
@@ -764,7 +609,6 @@ function SessionRealtimeStats({ sessionId }) {
         </div>
       )}
 
-      {/* Hook Distribution - Only show for non-full modes */}
       {stats.mode !== 'full' && stats.hooks && Object.keys(stats.hooks).length > 0 && (
         <div className="realtime-panel">
           <h3>🪝 Hook Distribution</h3>
@@ -800,7 +644,6 @@ function SessionRealtimeStats({ sessionId }) {
         </div>
       )}
 
-      {/* Info Footer */}
       <div className="realtime-panel full-width">
         <div className="empty-events">
           <p>📈 Stats update mỗi 1 giây qua WebSocket</p>

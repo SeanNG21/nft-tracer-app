@@ -4,7 +4,6 @@ import './PacketDetail.css';
 const PacketDetail = ({ packet, onClose }) => {
   const [activeTab, setActiveTab] = useState('overview');
 
-  // Show placeholder if no packet selected
   if (!packet) {
     return (
       <div className="packet-detail">
@@ -17,13 +16,11 @@ const PacketDetail = ({ packet, onClose }) => {
     );
   }
 
-  // Format timestamp
   const formatTimestamp = (ns) => {
     if (!ns && ns !== 0) return 'N/A';
     return (ns / 1000000).toFixed(3) + ' ms';
   };
 
-  // Format duration
   const formatDuration = (ns) => {
     if (!ns && ns !== 0) return 'N/A';
     if (ns < 1000) return ns + ' ns';
@@ -31,12 +28,10 @@ const PacketDetail = ({ packet, onClose }) => {
     return (ns / 1000000).toFixed(2) + ' ms';
   };
 
-  // Render packet overview
   const renderOverview = () => (
     <div className="detail-section">
       <h4>Packet Information</h4>
 
-      {/* Debug info - shows which packet is selected */}
       {packet.original_index !== undefined && (
         <div className="packet-identifier">
           <span className="identifier-label">Packet Index:</span>
@@ -87,7 +82,6 @@ const PacketDetail = ({ packet, onClose }) => {
           <label>Duration</label>
           <span>{formatDuration(packet.duration_ns)}</span>
         </div>
-        {/* Show branch for full mode, hook for other modes */}
         {packet.branch ? (
           <div className="info-item">
             <label>Branch</label>
@@ -109,7 +103,6 @@ const PacketDetail = ({ packet, onClose }) => {
           <label>Unique Functions</label>
           <span>{packet.unique_functions ?? 0}</span>
         </div>
-        {/* Only show unique_layers if available (not in new simplified format) */}
         {packet.unique_layers !== undefined && (
           <div className="info-item">
             <label>Unique Layers</label>
@@ -160,7 +153,6 @@ const PacketDetail = ({ packet, onClose }) => {
     </div>
   );
 
-  // Render function call flow
   const renderFunctionFlow = () => (
     <div className="detail-section">
       <h4>Function Call Flow</h4>
@@ -198,12 +190,10 @@ const PacketDetail = ({ packet, onClose }) => {
     </div>
   );
 
-  // Render verdict chain
   const renderVerdictChain = () => (
     <div className="detail-section">
       <h4>Verdict Chain</h4>
 
-      {/* Drop Reason */}
       {packet.analysis?.drop_reason && (
         <div className="drop-reason alert alert-danger">
           <strong>Drop Reason:</strong>
@@ -216,7 +206,6 @@ const PacketDetail = ({ packet, onClose }) => {
         </div>
       )}
 
-      {/* Verdict Chain Timeline */}
       {packet.analysis?.verdict_chain && packet.analysis.verdict_chain.length > 0 ? (
         <div className="verdict-timeline">
           {packet.analysis.verdict_chain.map((verdict, idx) => (
@@ -248,7 +237,6 @@ const PacketDetail = ({ packet, onClose }) => {
         <p className="no-data">No verdict information available</p>
       )}
 
-      {/* Jump/Goto Chain */}
       {packet.analysis?.jump_goto_chain && packet.analysis.jump_goto_chain.length > 0 && (
         <div className="jump-goto-section">
           <h5>Jump/Goto Chain</h5>
@@ -269,9 +257,7 @@ const PacketDetail = ({ packet, onClose }) => {
     </div>
   );
 
-  // Render all events (function calls)
   const renderEvents = () => {
-    // Support both old format (all_events) and new format (events)
     const eventsList = packet.events || packet.all_events || [];
     const eventsCount = packet.all_events_count || eventsList.length || 0;
 
@@ -287,7 +273,6 @@ const PacketDetail = ({ packet, onClose }) => {
                 <span className="event-time">{formatTimestamp(event.timestamp)}</span>
               </div>
               <div className="event-details">
-                {/* New simplified format (full mode) - has function but no trace_type */}
                 {(!event.trace_type && event.function) && (
                   <>
                     <span><strong>Function:</strong> {event.function}</span>
@@ -297,7 +282,6 @@ const PacketDetail = ({ packet, onClose }) => {
                   </>
                 )}
 
-                {/* Old format with trace_type */}
                 {event.trace_type === 'function_call' && (
                   <>
                     <span><strong>Function:</strong> {event.function}</span>
@@ -319,19 +303,16 @@ const PacketDetail = ({ packet, onClose }) => {
     );
   };
 
-  // Render NFT Events (nftables trace events)
   const renderNFTEvents = () => {
     const nftEventsList = packet.nft_events || [];
     const nftEventsCount = packet.nft_events_count || nftEventsList.length || 0;
 
-    // Verdict code mapping
     const verdictMap = {
       0: 'DROP', 1: 'ACCEPT', 2: 'STOLEN',
       3: 'QUEUE', 4: 'REPEAT', 5: 'STOP',
       '-1': 'JUMP', '-2': 'GOTO', '-3': 'RETURN'
     };
 
-    // Hook mapping
     const hookMap = {
       0: 'PREROUTING',
       1: 'INPUT',
@@ -388,7 +369,6 @@ const PacketDetail = ({ packet, onClose }) => {
 
   return (
     <div className="packet-detail">
-      {/* Tabs */}
       <div className="detail-tabs">
         <button
           className={`tab ${activeTab === 'overview' ? 'active' : ''}`}
@@ -428,7 +408,6 @@ const PacketDetail = ({ packet, onClose }) => {
         </button>
       </div>
 
-      {/* Tab Content */}
       <div className="detail-content">
         {activeTab === 'overview' && renderOverview()}
         {activeTab === 'functions' && renderFunctionFlow()}

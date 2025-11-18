@@ -1,8 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
-// Full Mode Tracer - Integrated SKB + NFT tracking
-// Backend version - compatible with app.py
-// FIXED: No duplicate chain_exit, Function IP tracking
-
 #include <uapi/linux/ptrace.h>
 #include <linux/sched.h>
 
@@ -12,13 +7,11 @@ typedef unsigned int u32;
 typedef unsigned long long u64;
 typedef signed int s32;
 
-// Event types for unified tracing
 #define EVENT_TYPE_FUNCTION_CALL 0
 #define EVENT_TYPE_NFT_CHAIN     1
 #define EVENT_TYPE_NFT_RULE      2
 #define EVENT_TYPE_NF_VERDICT    3
 
-// Unified event structure matching backend expectations
 struct trace_event {
     u64 timestamp;
     u64 skb_addr;
@@ -35,38 +28,32 @@ struct trace_event {
     u16 src_port;
     u16 dst_port;
     u32 length;
-    
-    // NFT specific fields
+
     u64 chain_addr;
     u64 expr_addr;
     u8 chain_depth;
     u16 rule_seq;
     u64 rule_handle;
-    
-    // Verdict info
+
     s32 verdict_raw;
     u32 verdict;
     u16 queue_num;
     u8 has_queue_bypass;
-    
-    // Function tracking
-    u64 func_ip;  // NEW: Function instruction pointer for name lookup
+
+    u64 func_ip;
     char function_name[64];
     char comm[16];
 };
 
-// Maps
 BPF_PERF_OUTPUT(events);
 BPF_HASH(skb_info_map, u64, struct trace_event, 10240);
 BPF_HASH(depth_map, u64, u8, 10240);
-// Hook state map: stores current hook for each SKB
 struct hook_state {
     u8 hook;
     u8 pf;
 };
 BPF_HASH(hook_map, u64, struct hook_state, 10240);
 
-// Helper: decode verdict
 static __always_inline u32 decode_verdict(s32 raw_ret, u32 raw_u32)
 {
     if (raw_ret < 0) {
@@ -85,7 +72,6 @@ static __always_inline u32 decode_verdict(s32 raw_ret, u32 raw_u32)
     return verdict;
 }
 
-// Helper: read comm
 static __always_inline void read_comm_safe(char *dest, u32 size)
 {
     #pragma unroll
@@ -100,7 +86,6 @@ static __always_inline void read_comm_safe(char *dest, u32 size)
     }
 }
 
-// Helper: extract rule handle
 static __always_inline u64 extract_rule_handle(void *expr)
 {
     if (!expr)
@@ -125,20 +110,17 @@ static __always_inline u64 extract_rule_handle(void *expr)
     return 0;
 }
 
-// Helper: extract packet info from sk_buff
 static __always_inline void extract_packet_info_from_skb(void *skb, struct trace_event *evt)
 {
     if (!skb)
         return;
     
     evt->skb_addr = (u64)skb;
-    
-    // Get length
+
     u32 len = 0;
     bpf_probe_read_kernel(&len, sizeof(len), (char *)skb + 0x88);
     evt->length = len;
-    
-    // Get IP header pointer
+
     void *ip_header = NULL;
     bpf_probe_read_kernel(&ip_header, sizeof(ip_header), (char *)skb + 0xd0);
     
@@ -163,8 +145,7 @@ static __always_inline void extract_packet_info_from_skb(void *skb, struct trace
     evt->protocol = protocol;
     evt->src_ip = saddr;
     evt->dst_ip = daddr;
-    
-    // Extract ports
+
     if (protocol == 6 || protocol == 17) {
         u8 ihl = (ihl_version & 0x0F) * 4;
         void *trans_header = (char *)ip_header + ihl;
@@ -180,7 +161,6 @@ static __always_inline void extract_packet_info_from_skb(void *skb, struct trace
     }
 }
 
-// Helper: extract packet info from nft_pktinfo
 static __always_inline void extract_packet_info_from_pkt(void *pkt, struct trace_event *evt)
 {
     if (!pkt)
@@ -202,9 +182,6 @@ static __always_inline void extract_packet_info_from_pkt(void *pkt, struct trace
     }
 }
 
-// ==============================================
-// GENERIC SKB FUNCTION TRACER
-// ==============================================
 int trace_skb_func(struct pt_regs *ctx, struct sk_buff *skb)
 {
     u64 tid = bpf_get_current_pid_tgid();
@@ -215,13 +192,11 @@ int trace_skb_func(struct pt_regs *ctx, struct sk_buff *skb)
     evt.pid = (u32)(tid >> 32);
     evt.event_type = EVENT_TYPE_FUNCTION_CALL;
 
-    // CRITICAL: Get function IP for name lookup in userspace
     evt.func_ip = PT_REGS_IP(ctx);
 
     extract_packet_info_from_skb(skb, &evt);
     read_comm_safe(evt.comm, sizeof(evt.comm));
 
-    // FIX: Read hook value from hook_map if available
     if (evt.skb_addr != 0) {
         struct hook_state *hs = hook_map.lookup(&evt.skb_addr);
         if (hs) {
@@ -230,13 +205,11 @@ int trace_skb_func(struct pt_regs *ctx, struct sk_buff *skb)
         }
     }
 
-    // FILTER: Skip packets from/to app ports (3000=frontend, 5000=backend) to avoid loops
     if (evt.src_port == 3000 || evt.dst_port == 3000 ||
         evt.src_port == 5000 || evt.dst_port == 5000) {
         return 0;
     }
 
-    // Store in map for NFT hooks using TID as key (consistent with kretprobe)
     if (evt.skb_addr != 0) {
         skb_info_map.update(&tid, &evt);
     }
@@ -244,10 +217,6 @@ int trace_skb_func(struct pt_regs *ctx, struct sk_buff *skb)
     events.perf_submit(ctx, &evt, sizeof(evt));
     return 0;
 }
-
-// ==============================================
-// NFT HOOKS
-// ==============================================
 
 int kprobe__nft_do_chain(struct pt_regs *ctx)
 {
@@ -276,10 +245,8 @@ int kprobe__nft_do_chain(struct pt_regs *ctx)
     extract_packet_info_from_pkt(pkt, &evt);
     read_comm_safe(evt.comm, sizeof(evt.comm));
 
-    // FILTER: Skip packets from/to app ports (3000=frontend, 5000=backend) to avoid loops
     if (evt.src_port == 3000 || evt.dst_port == 3000 ||
         evt.src_port == 5000 || evt.dst_port == 5000) {
-        // Cleanup depth map before returning
         if (cur_depth && *cur_depth > 0) {
             u8 new_depth = *cur_depth - 1;
             depth_map.update(&tid, &new_depth);
@@ -289,13 +256,10 @@ int kprobe__nft_do_chain(struct pt_regs *ctx)
         return 0;
     }
 
-    // Store with TID as key for kretprobe to retrieve
     if (evt.skb_addr != 0) {
         skb_info_map.update(&tid, &evt);
     }
 
-    // FIX #1: DO NOT emit event here - wait for kretprobe to emit chain_exit with verdict
-    // This eliminates duplicate chain_exit events
     return 0;
 }
 
@@ -339,8 +303,7 @@ int kretprobe__nft_do_chain(struct pt_regs *ctx)
     }
 
     read_comm_safe(evt.comm, sizeof(evt.comm));
-    
-    // FIX #1: Only emit ONE chain_exit event (from kretprobe with verdict)
+
     events.perf_submit(ctx, &evt, sizeof(evt));
 
     if (depth_ptr && *depth_ptr > 0) {
@@ -409,7 +372,6 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
     return 0;
 }
 
-// Kprobe: Capture hook value when nf_hook_slow is called
 int kprobe__nf_hook_slow(struct pt_regs *ctx)
 {
     void *skb = (void *)PT_REGS_PARM1(ctx);
@@ -420,12 +382,10 @@ int kprobe__nf_hook_slow(struct pt_regs *ctx)
 
     u64 skb_addr = (u64)skb;
 
-    // Extract hook and pf from nf_hook_state
     struct hook_state hs = {};
-    bpf_probe_read_kernel(&hs.hook, sizeof(hs.hook), state);          // offset 0
-    bpf_probe_read_kernel(&hs.pf, sizeof(hs.pf), (char *)state + 1);  // offset 1
+    bpf_probe_read_kernel(&hs.hook, sizeof(hs.hook), state);
+    bpf_probe_read_kernel(&hs.pf, sizeof(hs.pf), (char *)state + 1);
 
-    // Store hook state for this SKB
     hook_map.update(&skb_addr, &hs);
 
     return 0;

@@ -1,4 +1,3 @@
-"""Function discovery modules for kernel sk_buff handlers"""
 
 from .btf_skb_discoverer import BTFSKBDiscoverer
 from .enhanced_skb_discoverer import EnhancedSKBDiscoverer

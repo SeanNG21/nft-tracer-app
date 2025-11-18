@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""
-Realtime Packet Tracer Backend - FINAL VERSION
-Complete working version with all fixes applied
-Compatible with both old and new frontend
-"""
 
 import os
 import sys
@@ -23,9 +18,6 @@ from flask_cors import CORS
 from bcc import BPF
 import ctypes as ct
 
-# ============================================
-# MAPPINGS AND CONSTANTS
-# ============================================
 
 HOOK_MAP = {
     0: "PRE_ROUTING",
@@ -112,102 +104,74 @@ PROTO_MAP = {
     132: "SCTP"
 }
 
-# Function → Pipeline Layer mapping (aligned with full trace mode)
 FUNCTION_TO_LAYER = {
-    # === INBOUND PIPELINE ===
-    # NIC Layer
     'napi_gro_receive': 'NIC',
     'netif_receive_skb': 'NIC',
     'netif_receive_skb_list_internal': 'NIC',
 
-    # Driver (NAPI)
     'napi_poll': 'Driver (NAPI)',
     'net_rx_action': 'Driver (NAPI)',
     'process_backlog': 'Driver (NAPI)',
 
-    # GRO
     'gro_normal_list': 'GRO',
     'dev_gro_receive': 'GRO',
     'skb_gro_receive': 'GRO',
 
-    # TC Ingress
     'tcf_classify': 'TC Ingress',
     'ingress_redirect': 'TC Ingress',
     'dev_queue_xmit_nit': 'TC Ingress',
 
-    # Netfilter (will be refined by hook value)
     'nf_hook_slow': 'Netfilter',
     'nf_hook_thresh': 'Netfilter',
     'nf_reinject': 'Netfilter',
 
-    # Conntrack
     'nf_conntrack_in': 'Conntrack',
     'nf_ct_invert_tuple': 'Conntrack',
     'nf_confirm': 'Conntrack',
 
-    # NAT
     'nf_nat_ipv4_pre_routing': 'NAT PREROUTING',
     'nf_nat_ipv4_fn': 'NAT',
 
-    # Routing Decision
     'ip_route_input_slow': 'Routing Decision',
     'fib_validate_source': 'Routing Decision',
     'ip_route_output_key_hash': 'Routing',
 
-    # Local Delivery
     'ip_local_deliver': 'Local Delivery',
     'ip_local_deliver_finish': 'Local Delivery',
 
-    # Netfilter INPUT
     'nf_queue': 'Netfilter',
 
-    # TCP/UDP (Inbound)
     'tcp_v4_rcv': 'TCP/UDP',
     'tcp_v4_do_rcv': 'TCP/UDP',
     'tcp_rcv_established': 'TCP/UDP',
     'udp_rcv': 'TCP/UDP',
     'udp_unicast_rcv_skb': 'TCP/UDP',
 
-    # Socket
-    # 'sock_def_readable': 'Socket',  # REMOVED: Generates too many low-value events
     'sk_filter_trim_cap': 'Socket',
 
-    # Forward
     'ip_forward': 'Forward',
     'ip_forward_finish': 'Forward',
 
-    # === OUTBOUND PIPELINE ===
-    # Application
     'tcp_sendmsg': 'Application',
     'udp_sendmsg': 'Application',
 
-    # TCP/UDP Output
     'tcp_write_xmit': 'TCP/UDP Output',
     'tcp_transmit_skb': 'TCP/UDP Output',
     'udp_send_skb': 'TCP/UDP Output',
 
-    # Routing Lookup (outbound)
     'ip_route_output_flow': 'Routing Lookup',
 
-    # NAT (outbound)
     'nf_nat_ipv4_out': 'NAT',
     'nf_nat_ipv4_local_fn': 'NAT',
 
-    # TC Egress
     'sch_direct_xmit': 'TC Egress',
 
-    # Driver TX / NIC TX
     'dev_queue_xmit': 'Driver TX',
     '__dev_queue_xmit': 'Driver TX',
     'dev_hard_start_xmit': 'Driver TX',
 }
 
 def refine_layer_by_hook(func_name: str, base_layer: str, hook: int) -> str:
-    """
-    Refine generic layer name based on netfilter hook value.
-    Hook values: 0=PREROUTING, 1=INPUT, 2=FORWARD, 3=OUTPUT, 4=POSTROUTING
-    """
-    # nf_hook_slow and similar functions need to be refined by hook
     if base_layer == 'Netfilter' or 'nf_hook' in func_name or 'nf_queue' in func_name:
         hook_map = {
             0: 'Netfilter PREROUTING',
@@ -218,15 +182,13 @@ def refine_layer_by_hook(func_name: str, base_layer: str, hook: int) -> str:
         }
         return hook_map.get(hook, base_layer)
 
-    # NAT functions need hook context
     if 'NAT' in base_layer or 'nf_nat' in func_name:
         if hook == 0:
             return 'NAT PREROUTING'
         elif hook in [3, 4]:
-            return 'NAT'  # POSTROUTING or OUTPUT - both are NAT stage
+            return 'NAT'
         return 'NAT'
 
-    # Routing functions
     if 'Routing' in base_layer:
         if 'input' in func_name:
             return 'Routing Decision'
@@ -237,20 +199,11 @@ def refine_layer_by_hook(func_name: str, base_layer: str, hook: int) -> str:
     return base_layer
 
 def detect_packet_direction_new(func_name: str, layer: str, hook: int) -> str:
-    """
-    Detect packet direction (Inbound or Outbound) based on function name, layer, and hook.
-
-    Hook-based detection (most reliable):
-    - PRE_ROUTING (0), LOCAL_IN (1), FORWARD (2) → Inbound
-    - LOCAL_OUT (3), POST_ROUTING (4) → Outbound
-    """
-    # Hook-based detection (most reliable)
-    if hook in [0, 1, 2]:  # PREROUTING, INPUT, FORWARD
+    if hook in [0, 1, 2]:
         return 'Inbound'
-    elif hook in [3, 4]:  # OUTPUT, POSTROUTING
+    elif hook in [3, 4]:
         return 'Outbound'
 
-    # Layer-based detection
     inbound_layers = [
         'NIC', 'Driver (NAPI)', 'GRO', 'TC Ingress',
         'Netfilter PREROUTING', 'Netfilter INPUT', 'Netfilter FORWARD',
@@ -267,7 +220,6 @@ def detect_packet_direction_new(func_name: str, layer: str, hook: int) -> str:
     if layer in outbound_layers:
         return 'Outbound'
 
-    # Function name heuristics
     func_lower = func_name.lower()
     inbound_keywords = ['rcv', 'receive', 'input', 'ingress', 'deliver']
     outbound_keywords = ['sendmsg', 'xmit', 'transmit', 'output', 'egress']
@@ -279,25 +231,19 @@ def detect_packet_direction_new(func_name: str, layer: str, hook: int) -> str:
         if keyword in func_lower:
             return 'Outbound'
 
-    # TCP/UDP and Forward are special
     if layer in ['TCP/UDP', 'Forward']:
         if 'sendmsg' in func_lower:
             return 'Outbound'
         return 'Inbound'
 
-    # Default to Inbound
     return 'Inbound'
 
-# ============================================
-# DATA STRUCTURES
-# ============================================
 
 @dataclass
 class NodeStats:
-    """Statistics for a pipeline node (e.g., NIC, Netfilter PREROUTING, etc.)"""
     count: int = 0
     unique_skbs: set = field(default_factory=set)
-    latencies_us: List[float] = field(default_factory=list)  # microseconds
+    latencies_us: List[float] = field(default_factory=list)
     function_calls: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
     verdict_breakdown: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
     error_count: int = 0
@@ -323,7 +269,6 @@ class NodeStats:
             self.error_count += 1
 
     def get_latency_percentiles(self) -> Dict[str, float]:
-        """Calculate latency percentiles"""
         if not self.latencies_us:
             return {'p50': 0, 'p90': 0, 'p99': 0, 'avg': 0}
 
@@ -337,7 +282,6 @@ class NodeStats:
         }
 
     def get_top_functions(self, limit: int = 3) -> List[Dict]:
-        """Get top N functions with count and percentage"""
         if not self.function_calls:
             return []
 
@@ -354,7 +298,6 @@ class NodeStats:
         ]
 
     def to_dict(self) -> Dict:
-        """Convert to dict for JSON serialization"""
         latency = self.get_latency_percentiles()
         verdict_dict = dict(self.verdict_breakdown) if self.verdict_breakdown else None
 
@@ -371,7 +314,6 @@ class NodeStats:
 
 @dataclass
 class EdgeStats:
-    """Statistics for traffic flow between two nodes"""
     from_node: str
     to_node: str
     count: int = 0
@@ -385,7 +327,6 @@ class EdgeStats:
 
 @dataclass
 class PacketEvent:
-    """Single packet event from eBPF"""
     timestamp: float
     skb_addr: str
     cpu_id: int
@@ -408,7 +349,7 @@ class PacketEvent:
     function: str
     layer: str
     comm: str
-    
+
     chain_addr: Optional[str] = None
     rule_seq: Optional[int] = None
     rule_handle: Optional[int] = None
@@ -416,7 +357,6 @@ class PacketEvent:
 
 @dataclass
 class LayerStats:
-    """Statistics for a single layer"""
     packets_in: int = 0
     packets_out: int = 0
     drops: int = 0
@@ -429,35 +369,34 @@ class LayerStats:
     verdict_breakdown: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
     error_breakdown: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
     function_calls: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    
+
     @property
     def avg_latency_ms(self) -> float:
         if self.latency_count == 0:
             return 0.0
         return (self.total_latency_ns / self.latency_count) / 1_000_000
-    
+
     @property
     def drop_rate(self) -> float:
         total = self.packets_in
         if total == 0:
             return 0.0
         return (self.drops / total) * 100
-    
+
     def to_dict(self) -> Dict:
-        """Convert to dict - optimized for frontend graph"""
         top_func = None
         top_func_count = 0
         if self.function_calls:
             top_func, top_func_count = max(
-                self.function_calls.items(), 
+                self.function_calls.items(),
                 key=lambda x: x[1]
             )
-        
+
         verdict_pct = {}
         if self.packets_in > 0:
             for verdict, count in self.verdict_breakdown.items():
                 verdict_pct[verdict] = round((count / self.packets_in) * 100, 1)
-        
+
         return {
             'packets_in': self.packets_in,
             'packets_out': self.packets_out,
@@ -470,8 +409,8 @@ class LayerStats:
             'verdict_percentages': verdict_pct,
             'error_breakdown': dict(self.error_breakdown),
             'function_calls': dict(sorted(
-                self.function_calls.items(), 
-                key=lambda x: x[1], 
+                self.function_calls.items(),
+                key=lambda x: x[1],
                 reverse=True
             )[:10]),
             'top_function': top_func,
@@ -482,26 +421,24 @@ class LayerStats:
 
 @dataclass
 class HookStats:
-    """Statistics for a single hook"""
     layers: Dict[str, LayerStats] = field(default_factory=dict)
     packets_total: int = 0
-    
+
     def get_layer(self, layer_name: str) -> LayerStats:
         if layer_name not in self.layers:
             self.layers[layer_name] = LayerStats()
         return self.layers[layer_name]
-    
+
     def to_dict(self) -> Dict:
         return {
             'packets_total': self.packets_total,
             'layers': {
-                name: stats.to_dict() 
+                name: stats.to_dict()
                 for name, stats in self.layers.items()
             }
         }
 
 class RealtimeStats:
-    """Aggregated realtime statistics"""
 
     def __init__(self):
         self.hooks: Dict[str, HookStats] = {}
@@ -511,56 +448,47 @@ class RealtimeStats:
         self.start_time = time.time()
         self._lock = threading.Lock()
 
-        # NEW: Pipeline stats for Inbound/Outbound visualization
         self.stats_by_direction_layer = {
             'Inbound': defaultdict(int),
             'Outbound': defaultdict(int)
         }
 
-        # ENHANCED: Node-based statistics with detailed metrics
-        self.nodes: Dict[str, NodeStats] = {}  # node_name -> NodeStats
-        self.edges: Dict[tuple, EdgeStats] = {}  # (from, to) -> EdgeStats
-        self.skb_paths: Dict[str, List[str]] = {}  # skb_addr -> [node1, node2, ...]
-    
+        self.nodes: Dict[str, NodeStats] = {}
+        self.edges: Dict[tuple, EdgeStats] = {}
+        self.skb_paths: Dict[str, List[str]] = {}
+
     def get_hook(self, hook_name: str) -> HookStats:
         if hook_name not in self.hooks:
             self.hooks[hook_name] = HookStats()
         return self.hooks[hook_name]
 
     def get_node(self, node_name: str) -> NodeStats:
-        """Get or create a node's statistics"""
         if node_name not in self.nodes:
             self.nodes[node_name] = NodeStats()
         return self.nodes[node_name]
 
     def add_edge(self, from_node: str, to_node: str):
-        """Track an edge (transition) between two nodes"""
         edge_key = (from_node, to_node)
         if edge_key not in self.edges:
             self.edges[edge_key] = EdgeStats(from_node=from_node, to_node=to_node)
         self.edges[edge_key].count += 1
-    
+
     def _detect_direction(self, hook_name: str, layer_name: str, function: str, hook: int) -> str:
-        """Detect packet direction (Inbound or Outbound) using new pipeline mapping"""
-        # First try to use function-based detection
         if function and function in FUNCTION_TO_LAYER:
             base_layer = FUNCTION_TO_LAYER[function]
             refined_layer = refine_layer_by_hook(function, base_layer, hook)
             return detect_packet_direction_new(function, refined_layer, hook)
 
-        # Fallback to hook-based detection
         if hook_name in ['PRE_ROUTING', 'LOCAL_IN', 'FORWARD']:
             return 'Inbound'
         elif hook_name in ['LOCAL_OUT', 'POST_ROUTING']:
             return 'Outbound'
 
-        # Layer-based fallback (old layer names)
         if layer_name in ['Ingress', 'L2']:
             return 'Inbound'
         elif layer_name == 'Egress':
             return 'Outbound'
 
-        # Function-based fallback
         if function:
             func_lower = function.lower()
             if any(kw in func_lower for kw in ['rcv', 'receive', 'input', 'ingress', 'deliver']):
@@ -568,19 +496,14 @@ class RealtimeStats:
             elif any(kw in func_lower for kw in ['sendmsg', 'xmit', 'transmit', 'output', 'egress']):
                 return 'Outbound'
 
-        # Default to Inbound
         return 'Inbound'
 
     def _map_to_pipeline_layer(self, layer_name: str, function: str, hook: int) -> str:
-        """Map function to new pipeline layer name using FUNCTION_TO_LAYER"""
-        # First priority: Use FUNCTION_TO_LAYER mapping
         if function and function in FUNCTION_TO_LAYER:
             base_layer = FUNCTION_TO_LAYER[function]
-            # Refine by hook if needed (e.g., Netfilter → Netfilter PREROUTING)
             refined_layer = refine_layer_by_hook(function, base_layer, hook)
             return refined_layer
 
-        # Fallback: Old layer name mappings
         layer_map = {
             'Ingress': 'NIC',
             'L2': 'Driver (NAPI)',
@@ -593,7 +516,6 @@ class RealtimeStats:
         if layer_name in layer_map:
             return layer_map[layer_name]
 
-        # Fallback: Function-based heuristics
         if function:
             func_lower = function.lower()
             if 'napi' in func_lower:
@@ -628,32 +550,25 @@ class RealtimeStats:
         return layer_name
 
     def process_event(self, event: PacketEvent):
-        """Process a single packet event and update statistics"""
         with self._lock:
             hook_name = event.hook_name
             layer_name = event.layer
 
-            # Allow all valid hooks and layers - don't filter too strictly
-            # This ensures we capture all hooks: PRE_ROUTING, LOCAL_IN, FORWARD, LOCAL_OUT, POST_ROUTING
             if hook_name == "UNKNOWN" or not layer_name:
                 return
 
-            # NEW: Track pipeline stats for Inbound/Outbound using new mapping
-            hook = event.hook if event.hook != 255 else 0  # Default to PREROUTING if unknown
+            hook = event.hook if event.hook != 255 else 0
             direction = self._detect_direction(hook_name, layer_name, event.function or '', hook)
             pipeline_layer = self._map_to_pipeline_layer(layer_name, event.function or '', hook)
             self.stats_by_direction_layer[direction][pipeline_layer] += 1
 
-            # ENHANCED: Track detailed node statistics
             node = self.get_node(pipeline_layer)
 
-            # Calculate latency in microseconds
             latency_us = 0.0
             if event.skb_addr and event.skb_addr in self.skb_tracking:
                 first_ts = self.skb_tracking[event.skb_addr]['first_ts']
-                latency_us = (event.timestamp - first_ts) * 1_000_000  # convert to microseconds
+                latency_us = (event.timestamp - first_ts) * 1_000_000
 
-            # Add event to node
             node.add_event(
                 skb_addr=event.skb_addr or '',
                 latency_us=latency_us,
@@ -662,87 +577,79 @@ class RealtimeStats:
                 error=(event.error_code > 0)
             )
 
-            # Track edges (transitions between nodes)
             if event.skb_addr:
                 if event.skb_addr not in self.skb_paths:
                     self.skb_paths[event.skb_addr] = []
 
-                # If there's a previous node, create an edge
                 if self.skb_paths[event.skb_addr]:
                     prev_node = self.skb_paths[event.skb_addr][-1]
-                    if prev_node != pipeline_layer:  # Avoid self-loops
+                    if prev_node != pipeline_layer:
                         self.add_edge(prev_node, pipeline_layer)
 
-                # Add current node to path
                 self.skb_paths[event.skb_addr].append(pipeline_layer)
 
-                # Limit path history
                 if len(self.skb_paths) > 10000:
                     oldest_keys = list(self.skb_paths.keys())[:1000]
                     for key in oldest_keys:
                         del self.skb_paths[key]
-            
-            # Accept event even if layer not in strict map - this helps capture more data
-            # We'll validate layer presence in HOOK_LAYER_MAP but still process
+
             expected_layers = HOOK_LAYER_MAP.get(hook_name, [])
             if expected_layers and layer_name not in expected_layers:
-                # Layer exists but not expected for this hook - still process but mark as unexpected
-                pass  # Continue processing anyway
-            
+                pass
+
             hook_stats = self.get_hook(hook_name)
             hook_stats.packets_total += 1
             self.total_packets += 1
-            
+
             layer_stats = hook_stats.get_layer(layer_name)
             layer_stats.packets_in += 1
-            
+
             if layer_stats.first_ts is None:
                 layer_stats.first_ts = event.timestamp
             layer_stats.last_ts = event.timestamp
-            
+
             if event.verdict_name:
                 layer_stats.verdict_breakdown[event.verdict_name] += 1
-                
+
                 if event.verdict_name == "DROP":
                     layer_stats.drops += 1
                 elif event.verdict_name == "ACCEPT":
                     layer_stats.accepts += 1
                     layer_stats.packets_out += 1
-            
+
             if event.error_code > 0:
                 layer_stats.errors += 1
                 layer_stats.error_breakdown[event.error_name] += 1
-            
+
             if event.function:
                 layer_stats.function_calls[event.function] += 1
-            
+
             if event.skb_addr:
                 if event.skb_addr not in self.skb_tracking:
                     self.skb_tracking[event.skb_addr] = {
                         'first_ts': event.timestamp,
                         'hooks': []
                     }
-                
+
                 skb_info = self.skb_tracking[event.skb_addr]
                 skb_info['hooks'].append({
                     'hook': hook_name,
                     'layer': layer_name,
                     'ts': event.timestamp
                 })
-                
+
                 latency_ns = int((event.timestamp - skb_info['first_ts']) * 1_000_000_000)
                 layer_stats.total_latency_ns += latency_ns
                 layer_stats.latency_count += 1
-                
+
                 if len(self.skb_tracking) > 10000:
                     oldest_keys = list(self.skb_tracking.keys())[:1000]
                     for key in oldest_keys:
                         del self.skb_tracking[key]
-            
+
             self.recent_events.append(asdict(event))
-    
+
     def get_summary(self) -> Dict:
-        """Get current statistics summary - optimized for frontend graph"""
         with self._lock:
             uptime = time.time() - self.start_time
 
@@ -755,7 +662,6 @@ class RealtimeStats:
                 if hook_name not in HOOK_ORDER:
                     hooks_data[hook_name] = hook_stats.to_dict()
 
-            # ENHANCED: Serialize nodes and edges
             nodes_data = {}
             for node_name, node_stats in self.nodes.items():
                 nodes_data[node_name] = node_stats.to_dict()
@@ -770,40 +676,31 @@ class RealtimeStats:
                 'packets_per_second': round(self.total_packets / max(uptime, 1), 2),
                 'hooks': hooks_data,
                 'recent_events': list(self.recent_events)[-100:],
-                # NEW: Pipeline stats for Inbound/Outbound visualization
                 'stats': {
                     'Inbound': dict(self.stats_by_direction_layer['Inbound']),
                     'Outbound': dict(self.stats_by_direction_layer['Outbound'])
                 },
-                # ENHANCED: Detailed node and edge statistics
                 'nodes': nodes_data,
                 'edges': edges_data
             }
-    
+
     def reset(self):
-        """Reset all statistics"""
         with self._lock:
             self.hooks.clear()
             self.skb_tracking.clear()
             self.recent_events.clear()
             self.total_packets = 0
             self.start_time = time.time()
-            # NEW: Reset pipeline stats
             self.stats_by_direction_layer = {
                 'Inbound': defaultdict(int),
                 'Outbound': defaultdict(int)
             }
-            # ENHANCED: Reset nodes and edges
             self.nodes.clear()
             self.edges.clear()
             self.skb_paths.clear()
 
-# ============================================
-# HELPER FUNCTIONS
-# ============================================
 
 def format_ip(ip_int: int) -> str:
-    """Format IP address from integer"""
     if ip_int == 0:
         return "0.0.0.0"
     try:
@@ -812,11 +709,10 @@ def format_ip(ip_int: int) -> str:
         return "0.0.0.0"
 
 def get_layer_from_function(func_name: str) -> str:
-    """Determine layer from function name"""
     for layer, functions in LAYER_MAP.items():
         if func_name in functions:
             return layer
-    
+
     func_lower = func_name.lower()
     if 'netif' in func_lower or 'rx' in func_lower:
         return "Ingress"
@@ -830,11 +726,10 @@ def get_layer_from_function(func_name: str) -> str:
         return "Socket"
     elif 'xmit' in func_lower or 'dev_queue' in func_lower:
         return "Egress"
-    
+
     return "UNKNOWN"
 
 def resolve_function_name(bpf_obj, func_ip: int) -> str:
-    """Resolve function name from instruction pointer"""
     try:
         sym = bpf_obj.ksym(func_ip)
         if sym:
@@ -843,19 +738,15 @@ def resolve_function_name(bpf_obj, func_ip: int) -> str:
         pass
     return f"func_{hex(func_ip)}"
 
-# ============================================
-# REALTIME TRACER CLASS
-# ============================================
 
 class RealtimeTracer:
-    """Main realtime tracer with eBPF and Flask-SocketIO"""
-    
+
     def __init__(self, socketio: SocketIO, bpf_code_path: str = None):
         self.socketio = socketio
         self.bpf = None
         self.stats = RealtimeStats()
         self.running = False
-        
+
         if bpf_code_path:
             self.bpf_code_path = bpf_code_path
         else:
@@ -867,122 +758,98 @@ class RealtimeTracer:
                 os.path.join(os.path.dirname(__file__), "full_tracer.bpf.c"),
                 os.path.join(os.path.dirname(__file__), "full_tracer_bpf.c"),
             ]
-            
+
             self.bpf_code_path = None
             for path in possible_paths:
                 if os.path.exists(path):
                     self.bpf_code_path = path
                     print(f"[*] Found BPF code at: {path}")
                     break
-            
+
             if not self.bpf_code_path:
                 self.bpf_code_path = possible_paths[0]
-        
+
         self.func_name_cache = {}
-        
+
     def load_bpf(self) -> bool:
-        """Load and compile BPF program"""
         try:
             if not os.path.exists(self.bpf_code_path):
                 print(f"[!] BPF code not found: {self.bpf_code_path}")
                 return False
-            
+
             with open(self.bpf_code_path, 'r') as f:
                 bpf_code = f.read()
-            
+
             print("[*] Compiling BPF program...")
             self.bpf = BPF(text=bpf_code)
-            
-            # FIXED: 54 critical networking functions aligned with full trace mode
+
             functions_to_trace = [
-                # === INBOUND PIPELINE ===
-                # NIC Layer
                 'napi_gro_receive',
                 'netif_receive_skb',
                 'netif_receive_skb_list_internal',
 
-                # Driver (NAPI)
                 'napi_poll',
                 'net_rx_action',
                 'process_backlog',
 
-                # GRO
                 'gro_normal_list',
                 'dev_gro_receive',
                 'skb_gro_receive',
 
-                # TC Ingress
                 'tcf_classify',
                 'ingress_redirect',
                 'dev_queue_xmit_nit',
 
-                # Netfilter (refined by hook)
                 'nf_hook_slow',
                 'nf_hook_thresh',
                 'nf_reinject',
 
-                # Conntrack
                 'nf_conntrack_in',
                 'nf_ct_invert_tuple',
                 'nf_confirm',
 
-                # NAT
                 'nf_nat_ipv4_pre_routing',
                 'nf_nat_ipv4_fn',
 
-                # Routing Decision
                 'ip_route_input_slow',
                 'fib_validate_source',
                 'ip_route_output_key_hash',
 
-                # Local Delivery
                 'ip_local_deliver',
                 'ip_local_deliver_finish',
 
-                # NFT/Queue
                 'nf_queue',
 
-                # TCP/UDP (Inbound)
                 'tcp_v4_rcv',
                 'tcp_v4_do_rcv',
                 'tcp_rcv_established',
                 'udp_rcv',
                 'udp_unicast_rcv_skb',
 
-                # Socket
-                # 'sock_def_readable',  # REMOVED: Generates too many low-value events
                 'sk_filter_trim_cap',
 
-                # Forward
                 'ip_forward',
                 'ip_forward_finish',
 
-                # === OUTBOUND PIPELINE ===
-                # Application
                 'tcp_sendmsg',
                 'udp_sendmsg',
 
-                # TCP/UDP Output
                 'tcp_write_xmit',
                 'tcp_transmit_skb',
                 'udp_send_skb',
 
-                # Routing Lookup (outbound)
                 'ip_route_output_flow',
 
-                # NAT (outbound)
                 'nf_nat_ipv4_out',
                 'nf_nat_ipv4_local_fn',
 
-                # TC Egress
                 'sch_direct_xmit',
 
-                # Driver TX / NIC TX
                 'dev_queue_xmit',
                 '__dev_queue_xmit',
                 'dev_hard_start_xmit',
             ]
-            
+
             attached_count = 0
             for func_name in functions_to_trace:
                 try:
@@ -990,20 +857,19 @@ class RealtimeTracer:
                     attached_count += 1
                 except Exception as e:
                     pass
-            
+
             print(f"[✓] Attached to {attached_count} functions")
             print("[✓] NFT hooks attached via kprobe/kretprobe")
-            
+
             return True
-            
+
         except Exception as e:
             print(f"[✗] Failed to load BPF: {e}")
             import traceback
             traceback.print_exc()
             return False
-    
+
     def handle_event(self, cpu, data, size):
-        """Handle event from eBPF perf buffer"""
         try:
             class TraceEvent(ct.Structure):
                 _fields_ = [
@@ -1034,11 +900,11 @@ class RealtimeTracer:
                     ("function_name", ct.c_char * 64),
                     ("comm", ct.c_char * 16),
                 ]
-            
+
             event = ct.cast(data, ct.POINTER(TraceEvent)).contents
-            
+
             ts = time.time()
-            
+
             func_name = event.function_name.decode('utf-8', errors='ignore').strip('\x00')
             if not func_name and event.func_ip != 0:
                 if event.func_ip in self.func_name_cache:
@@ -1046,9 +912,9 @@ class RealtimeTracer:
                 else:
                     func_name = resolve_function_name(self.bpf, event.func_ip)
                     self.func_name_cache[event.func_ip] = func_name
-            
+
             layer = get_layer_from_function(func_name)
-            
+
             packet_event = PacketEvent(
                 timestamp=ts,
                 skb_addr=hex(event.skb_addr) if event.skb_addr else None,
@@ -1077,110 +943,89 @@ class RealtimeTracer:
                 rule_handle=event.rule_handle if event.rule_handle > 0 else None,
                 queue_num=event.queue_num if event.queue_num > 0 else None
             )
-            
-            # Process event and update stats (no longer emit individual events)
+
             self.stats.process_event(packet_event)
-            # Comment out individual event emission - only send aggregated stats every 1s
-            # self.socketio.emit('packet_event', asdict(packet_event))
-            
+
         except Exception as e:
             print(f"[!] Error handling event: {e}")
-    
+
     def start(self) -> bool:
-        """Start tracing"""
         if not self.load_bpf():
             return False
-        
-        # CRITICAL FIX: Increase buffer size to prevent sample loss
-        # Default: 8 pages = 32KB (too small for high traffic)
-        # New: 512 pages = 2MB (can handle burst traffic)
+
         self.bpf["events"].open_perf_buffer(
             self.handle_event,
-            page_cnt=512  # 512 * 4KB = 2MB buffer
+            page_cnt=512
         )
         self.running = True
 
         self.poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
         self.poll_thread.start()
-        
+
         self.stats_thread = threading.Thread(target=self._stats_broadcast_loop, daemon=True)
         self.stats_thread.start()
-        
+
         print("[✓] Realtime tracer started")
         return True
-    
+
     def _poll_loop(self):
-        """Poll eBPF perf buffer - poll frequently to avoid buffer overflow"""
         while self.running:
             try:
-                # CRITICAL FIX: Poll every 10ms instead of 100ms
-                # Faster polling = less chance of buffer overflow
                 self.bpf.perf_buffer_poll(timeout=10)
             except Exception as e:
                 if self.running:
                     print(f"[!] Poll error: {e}")
                 break
-    
+
     def _stats_broadcast_loop(self):
-        """Broadcast statistics every 0.5 seconds to reduce sample loss"""
         while self.running:
-            time.sleep(0.5)  # Changed from 1s to 0.5s for batching
+            time.sleep(0.5)
             try:
                 summary = self.stats.get_summary()
                 self.socketio.emit('stats_update', summary)
             except Exception as e:
                 print(f"[!] Stats broadcast error: {e}")
-    
+
     def stop(self):
-        """Stop tracing"""
         self.running = False
         if self.bpf:
             self.bpf.cleanup()
         print("[✓] Realtime tracer stopped")
-    
+
     def get_stats(self) -> Dict:
-        """Get current statistics"""
         return self.stats.get_summary()
-    
+
     def reset_stats(self):
-        """Reset statistics"""
         self.stats.reset()
 
-# ============================================
-# FLASK APPLICATION
-# ============================================
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'packet-tracer-realtime-2024'
 app.config['JSON_SORT_KEYS'] = False
 CORS(app)
 
-# CRITICAL FIX: Proper SocketIO configuration
 socketio = SocketIO(
-    app, 
-    cors_allowed_origins="*", 
+    app,
+    cors_allowed_origins="*",
     async_mode='threading',
-    logger=False,              # Fix: Disable logger to prevent conflicts
-    engineio_logger=False,     # Fix: Disable engineio logger
-    ping_timeout=60,           # Fix: Longer timeout
-    ping_interval=25           # Fix: Proper ping interval
+    logger=False,
+    engineio_logger=False,
+    ping_timeout=60,
+    ping_interval=25
 )
 
-# Global tracer instance
 tracer: Optional[RealtimeTracer] = None
 
-# Serve static files
 @app.route('/static/<path:path>')
 def send_static(path):
     return send_from_directory('static', path)
 
 @app.route('/')
 def index():
-    """Serve index page"""
     html_path = os.path.join(os.path.dirname(__file__), 'static', 'index.html')
     if os.path.exists(html_path):
         return send_from_directory('static', 'index.html')
-    
+
     return jsonify({
         'status': 'running',
         'message': 'Realtime Packet Tracer Backend',
@@ -1197,20 +1042,16 @@ def index():
         }
     })
 
-# ============================================
-# OLD API ROUTES (Backward compatibility)
-# ============================================
 
 @app.route('/api/start', methods=['POST'])
 def start_trace():
-    """Start tracing"""
     global tracer
-    
+
     if tracer and tracer.running:
         return jsonify({'error': 'Tracer already running'}), 400
-    
+
     tracer = RealtimeTracer(socketio)
-    
+
     if tracer.start():
         return jsonify({'status': 'started'})
     else:
@@ -1218,20 +1059,18 @@ def start_trace():
 
 @app.route('/api/stop', methods=['POST'])
 def stop_trace():
-    """Stop tracing"""
     global tracer
-    
+
     if not tracer or not tracer.running:
         return jsonify({'error': 'Tracer not running'}), 400
-    
+
     tracer.stop()
     return jsonify({'status': 'stopped'})
 
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
-    """Get current statistics"""
     global tracer
-    
+
     if not tracer:
         return jsonify({
             'total_packets': 0,
@@ -1239,35 +1078,30 @@ def get_stats():
             'packets_per_second': 0,
             'hooks': {}
         })
-    
+
     return jsonify(tracer.get_stats())
 
 @app.route('/api/reset', methods=['POST'])
 def reset_stats():
-    """Reset statistics"""
     global tracer
-    
+
     if not tracer:
         return jsonify({'error': 'Tracer not initialized'}), 400
-    
+
     tracer.reset_stats()
     return jsonify({'status': 'reset'})
 
-# ============================================
-# NEW API ROUTES (For new frontend)
-# ============================================
 
 @app.route('/api/realtime/enable', methods=['POST'])
 def enable_realtime():
-    """Enable realtime tracing"""
     global tracer
-    
+
     try:
         if tracer and tracer.running:
             return jsonify({'status': 'already_enabled'})
-        
+
         tracer = RealtimeTracer(socketio)
-        
+
         if tracer.start():
             socketio.emit('status', {'enabled': True})
             return jsonify({'status': 'enabled'})
@@ -1278,13 +1112,12 @@ def enable_realtime():
 
 @app.route('/api/realtime/disable', methods=['POST'])
 def disable_realtime():
-    """Disable realtime tracing"""
     global tracer
-    
+
     try:
         if not tracer or not tracer.running:
             return jsonify({'status': 'already_disabled'})
-        
+
         tracer.stop()
         socketio.emit('status', {'enabled': False})
         return jsonify({'status': 'disabled'})
@@ -1293,9 +1126,8 @@ def disable_realtime():
 
 @app.route('/api/realtime/stats', methods=['GET'])
 def get_realtime_stats():
-    """Get realtime statistics"""
     global tracer
-    
+
     try:
         if not tracer:
             return jsonify({
@@ -1305,7 +1137,7 @@ def get_realtime_stats():
                 'packets_per_second': 0,
                 'hooks': {}
             })
-        
+
         stats = tracer.get_stats()
         stats['enabled'] = tracer.running
         return jsonify(stats)
@@ -1314,57 +1146,44 @@ def get_realtime_stats():
 
 @app.route('/api/realtime/reset', methods=['POST'])
 def reset_realtime_stats():
-    """Reset realtime statistics"""
     global tracer
-    
+
     try:
         if not tracer:
             return jsonify({'error': 'Tracer not initialized'}), 400
-        
+
         tracer.reset_stats()
         return jsonify({'status': 'reset'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# ============================================
-# WEBSOCKET EVENTS
-# ============================================
 
 @socketio.on('connect')
 def handle_connect():
-    """Client connected"""
     print('[*] Client connected')
     emit('connected', {'status': 'connected'})
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    """Client disconnected"""
     print('[*] Client disconnected')
 
 @socketio.on('request_stats')
 def handle_stats_request():
-    """Client requests current stats"""
     global tracer
     if tracer:
         emit('stats_update', tracer.get_stats())
 
-# ============================================
-# REALTIME EXTENSION CLASS (For integration)
-# ============================================
 
 class SessionStatsTracker:
-    """Track realtime stats for a specific trace session"""
 
     def __init__(self, session_id: str, mode: str):
         self.session_id = session_id
         self.mode = mode
         self.start_time = time.time()
 
-        # Overall stats
         self.total_packets = 0
         self.total_events = 0
 
-        # Hook-based stats: hook_name -> HookStats
         self.hooks = defaultdict(lambda: {
             'packets_total': 0,
             'packets_in': 0,
@@ -1383,45 +1202,36 @@ class SessionStatsTracker:
             })
         })
 
-        # ENHANCED: Node-based statistics for full mode (enhanced pipeline visualization)
-        self.nodes: Dict[str, NodeStats] = {}  # node_name -> NodeStats
-        self.skb_tracking: Dict[str, Dict] = {}  # skb_addr -> {'first_ts': float, 'last_node': str}
-        self.skb_paths: Dict[str, List[str]] = {}  # skb_addr -> [node1, node2, ...]
+        self.nodes: Dict[str, NodeStats] = {}
+        self.skb_tracking: Dict[str, Dict] = {}
+        self.skb_paths: Dict[str, List[str]] = {}
         self.stats_by_direction_layer = {
             'Inbound': defaultdict(int),
             'Outbound': defaultdict(int)
         }
 
-        # Multifunction-specific stats
         self.stats_by_layer = defaultdict(int)
         self.stats_by_hook = defaultdict(int)
         self.stats_by_verdict = defaultdict(int)
 
-        # Recent events (keep last 50)
         self.recent_events = deque(maxlen=50)
 
-        # Lock for thread safety
         self.lock = threading.Lock()
 
     def get_node(self, node_name: str) -> NodeStats:
-        """Get or create a node's statistics"""
         if node_name not in self.nodes:
             self.nodes[node_name] = NodeStats()
         return self.nodes[node_name]
-    
+
     def process_event(self, event: Dict):
-        """Process a single event"""
         with self.lock:
             self.total_events += 1
 
-            # Debug: Log first few events
             if self.total_events <= 5:
                 print(f"[SessionStats {self.session_id}] Event #{self.total_events}: hook={event.get('hook')}, func={event.get('func_name', 'N/A')}, type={event.get('event_type', 'normal')}")
 
-            # Check if multifunction mode
             is_multifunction = event.get('event_type') == 'multifunction'
 
-            # Extract event info
             hook_num = event.get('hook', 255)
             hook_name = HOOK_MAP.get(hook_num, 'UNKNOWN')
             func_name = event.get('func_name', '')
@@ -1431,15 +1241,12 @@ class SessionStatsTracker:
             src_ip = event.get('src_ip', '0.0.0.0')
             dst_ip = event.get('dst_ip', '0.0.0.0')
 
-            # Determine layer
             if is_multifunction and 'layer' in event:
-                layer_name_raw = event['layer']  # Layer from BPF metadata
-                # Map BPF layer names to frontend layer names
+                layer_name_raw = event['layer']
                 layer_name = self._map_multifunction_layer(layer_name_raw, hook_name)
             else:
                 layer_name = self._determine_layer(func_name, hook_name)
 
-            # Multifunction-specific stats
             if is_multifunction:
                 if layer_name and layer_name != 'Unknown':
                     self.stats_by_layer[layer_name] += 1
@@ -1449,33 +1256,26 @@ class SessionStatsTracker:
 
                 if verdict != 255:
                     self.stats_by_verdict[verdict_name] += 1
-            
-            # Update hook stats
+
             hook_stats = self.hooks[hook_name]
             hook_stats['packets_total'] += 1
-            
-            # Update layer stats
+
             layer_stats = hook_stats['layers'][layer_name]
             layer_stats['packets_in'] += 1
-            
-            # Track verdict
+
             layer_stats['verdict_breakdown'][verdict_name] += 1
-            
-            # Track function
+
             if func_name:
                 layer_stats['function_calls'][func_name] += 1
-                
-                # Update top function
+
                 if layer_stats['function_calls'][func_name] > layer_stats['top_function_calls']:
                     layer_stats['top_function'] = func_name
                     layer_stats['top_function_calls'] = layer_stats['function_calls'][func_name]
-            
-            # Calculate drop rate
+
             total_in = layer_stats['packets_in']
             drops = layer_stats['verdict_breakdown'].get('DROP', 0)
             layer_stats['drop_rate'] = (drops / total_in * 100) if total_in > 0 else 0.0
 
-            # Add to recent events (skip for multifunction - only aggregated stats)
             if not is_multifunction:
                 self.recent_events.append({
                     'type': 'nft' if func_name == 'nft_do_chain' else 'trace',
@@ -1488,21 +1288,15 @@ class SessionStatsTracker:
                     'timestamp': time.time()
                 })
 
-            # ENHANCED: Track pipeline nodes for full mode (for enhanced visualization)
             if self.mode == 'full':
-                # Map to pipeline layer
                 pipeline_layer = self._map_to_pipeline_layer(layer_name, func_name, hook_num)
 
-                # Detect direction
                 direction = self._detect_direction(hook_name, layer_name, func_name, hook_num)
 
-                # Update direction stats
                 self.stats_by_direction_layer[direction][pipeline_layer] += 1
 
-                # Get or create node
                 node = self.get_node(pipeline_layer)
 
-                # Track SKB and calculate latency
                 skb_addr = event.get('skb_addr', '')
                 timestamp = event.get('timestamp', time.time())
                 latency_us = 0.0
@@ -1515,17 +1309,14 @@ class SessionStatsTracker:
                         }
                     else:
                         first_ts = self.skb_tracking[skb_addr]['first_ts']
-                        latency_us = (timestamp - first_ts) * 1_000_000  # microseconds
+                        latency_us = (timestamp - first_ts) * 1_000_000
                         self.skb_tracking[skb_addr]['last_node'] = pipeline_layer
 
-                    # Limit tracking to prevent memory bloat
                     if len(self.skb_tracking) > 10000:
-                        # Remove oldest 1000 entries
                         oldest_keys = list(self.skb_tracking.keys())[:1000]
                         for key in oldest_keys:
                             del self.skb_tracking[key]
 
-                # Add event to node
                 node.add_event(
                     skb_addr=skb_addr,
                     latency_us=latency_us,
@@ -1534,41 +1325,32 @@ class SessionStatsTracker:
                     error=(event.get('error_code', 0) > 0)
                 )
 
-            # Update total packets (count unique packets, not events)
             self.total_packets = max(self.total_packets, sum(h['packets_total'] for h in self.hooks.values()) // max(len(self.hooks), 1))
-    
+
     def _detect_direction(self, hook_name: str, layer_name: str, function: str, hook: int) -> str:
-        """Detect packet direction (Inbound or Outbound)"""
-        # First try to use function-based detection
         if function and function in FUNCTION_TO_LAYER:
             base_layer = FUNCTION_TO_LAYER[function]
             refined_layer = refine_layer_by_hook(function, base_layer, hook)
             return detect_packet_direction_new(function, refined_layer, hook)
 
-        # Fallback to hook-based detection
         if hook_name in ['PRE_ROUTING', 'LOCAL_IN', 'FORWARD']:
             return 'Inbound'
         elif hook_name in ['LOCAL_OUT', 'POST_ROUTING']:
             return 'Outbound'
 
-        # Layer-based fallback
         if layer_name in ['Ingress', 'L2']:
             return 'Inbound'
         elif layer_name == 'Egress':
             return 'Outbound'
 
-        return 'Inbound'  # Default
+        return 'Inbound'
 
     def _map_to_pipeline_layer(self, layer_name: str, function: str, hook: int) -> str:
-        """Map function to pipeline layer name using FUNCTION_TO_LAYER"""
-        # First priority: Use FUNCTION_TO_LAYER mapping
         if function and function in FUNCTION_TO_LAYER:
             base_layer = FUNCTION_TO_LAYER[function]
-            # Refine by hook if needed
             refined_layer = refine_layer_by_hook(function, base_layer, hook)
             return refined_layer
 
-        # Fallback: Old layer name mappings
         layer_map = {
             'Ingress': 'NIC',
             'L2': 'Driver (NAPI)',
@@ -1581,7 +1363,6 @@ class SessionStatsTracker:
         if layer_name in layer_map:
             return layer_map[layer_name]
 
-        # Function-based heuristics
         if function:
             func_lower = function.lower()
             if 'napi' in func_lower:
@@ -1594,8 +1375,6 @@ class SessionStatsTracker:
         return layer_name or 'Unknown'
 
     def _map_multifunction_layer(self, bpf_layer: str, hook_name: str) -> str:
-        """Map BPF layer names to frontend layer names"""
-        # Mapping from BPF trace_config.json layers to frontend LAYER_MAP
         layer_mapping = {
             'Device': 'Ingress',
             'GRO': 'Ingress',
@@ -1619,46 +1398,36 @@ class SessionStatsTracker:
 
         frontend_layer = layer_mapping.get(bpf_layer, bpf_layer)
 
-        # Verify layer is valid for this hook
         valid_layers = HOOK_LAYER_MAP.get(hook_name, [])
         if frontend_layer in valid_layers:
             return frontend_layer
 
-        # If not valid, try to find best match
         if valid_layers:
-            # Prefer Firewall for hooks that support it
             if 'Firewall' in valid_layers and bpf_layer in ['Netfilter', 'NFT']:
                 return 'Firewall'
-            # Otherwise return first valid layer
             return valid_layers[0]
 
         return frontend_layer
 
     def _determine_layer(self, func_name: str, hook_name: str) -> str:
-        """Determine which layer a function belongs to"""
         if not func_name:
             return "Unknown"
 
-        # Check each layer's functions
         for layer, functions in LAYER_MAP.items():
             for func in functions:
                 if func in func_name:
-                    # Verify layer is valid for this hook
                     valid_layers = HOOK_LAYER_MAP.get(hook_name, [])
                     if layer in valid_layers:
                         return layer
 
-        # Default to first valid layer for hook
         valid_layers = HOOK_LAYER_MAP.get(hook_name, [])
         return valid_layers[0] if valid_layers else "Unknown"
-    
+
     def get_stats(self) -> Dict:
-        """Get current statistics"""
         with self.lock:
             uptime = time.time() - self.start_time
             pps = self.total_events / uptime if uptime > 0 else 0
-            
-            # Convert defaultdicts to regular dicts for JSON
+
             hooks_dict = {}
             for hook_name, hook_data in self.hooks.items():
                 layers_dict = {}
@@ -1672,14 +1441,14 @@ class SessionStatsTracker:
                         'top_function_calls': layer_data['top_function_calls'],
                         'avg_latency_ms': layer_data['avg_latency_ms']
                     }
-                
+
                 hooks_dict[hook_name] = {
                     'packets_total': hook_data['packets_total'],
                     'packets_in': hook_data['packets_in'],
                     'packets_out': hook_data['packets_out'],
                     'layers': layers_dict
                 }
-            
+
             stats = {
                 'session_id': self.session_id,
                 'mode': self.mode,
@@ -1690,16 +1459,13 @@ class SessionStatsTracker:
                 'hooks': hooks_dict
             }
 
-            # Add multifunction-specific stats (aggregated only, no individual events)
             if self.mode == 'multifunction':
                 stats['stats_by_layer'] = dict(self.stats_by_layer)
                 stats['stats_by_hook'] = dict(self.stats_by_hook)
                 stats['stats_by_verdict'] = dict(self.stats_by_verdict)
             else:
-                # Only include recent_events for non-multifunction modes
                 stats['recent_events'] = list(self.recent_events)
 
-            # ENHANCED: Add nodes data for full mode (for enhanced pipeline visualization)
             if self.mode == 'full':
                 nodes_data = {}
                 for node_name, node_stats in self.nodes.items():
@@ -1709,57 +1475,49 @@ class SessionStatsTracker:
             return stats
 
 class RealtimeExtension:
-    """Wrapper class for integrating realtime tracer into main app"""
-    
+
     def __init__(self, app: Flask, socketio: SocketIO):
         self.app = app
         self.socketio = socketio
         self.tracer: Optional[RealtimeTracer] = None
-        
-        # Session-specific tracking
-        self.session_trackers = {}  # session_id -> SessionStatsTracker
+
+        self.session_trackers = {}
         self.session_lock = threading.Lock()
         self._session_stats_thread = None
         self._session_stats_running = False
-        
-        # Setup WebSocket handlers
+
         self._setup_session_handlers()
-        
+
         print("[*] RealtimeExtension initialized")
-    
+
     def enable(self) -> bool:
-        """Enable realtime tracing"""
         if self.tracer and self.tracer.running:
             return True
-        
+
         self.tracer = RealtimeTracer(self.socketio)
-        
+
         if self.tracer.start():
             self.socketio.emit('status', {'enabled': True})
             return True
         else:
             return False
-    
+
     def disable(self) -> bool:
-        """Disable realtime tracing"""
         if not self.tracer or not self.tracer.running:
             return True
-        
+
         self.tracer.stop()
         self.socketio.emit('status', {'enabled': False})
         return True
-    
+
     def is_enabled(self) -> bool:
-        """Check if realtime tracing is enabled"""
         return self.tracer is not None and self.tracer.running
-    
+
     def has_session(self, session_id: str) -> bool:
-        """Check if a session is being tracked"""
         with self.session_lock:
             return session_id in self.session_trackers
-    
+
     def get_stats(self) -> Dict:
-        """Get current statistics"""
         if not self.tracer:
             return {
                 'enabled': False,
@@ -1768,20 +1526,17 @@ class RealtimeExtension:
                 'packets_per_second': 0,
                 'hooks': {}
             }
-        
+
         stats = self.tracer.get_stats()
         stats['enabled'] = self.tracer.running
         return stats
-    
+
     def reset_stats(self):
-        """Reset statistics"""
         if self.tracer:
             self.tracer.reset_stats()
-    
-    # ============= SESSION-SPECIFIC TRACKING =============
-    
+
+
     def _setup_session_handlers(self):
-        """Setup WebSocket handlers for session tracking"""
         @self.socketio.on('join_session')
         def handle_join_session(data):
             session_id = data.get('session_id')
@@ -1790,7 +1545,7 @@ class RealtimeExtension:
                 join_room(f"session_{session_id}")
                 print(f"[WebSocket] Client joined session room: session_{session_id}")
                 emit('joined_session', {'session_id': session_id})
-        
+
         @self.socketio.on('leave_session')
         def handle_leave_session(data):
             session_id = data.get('session_id')
@@ -1798,9 +1553,8 @@ class RealtimeExtension:
                 from flask_socketio import leave_room
                 leave_room(f"session_{session_id}")
                 print(f"[WebSocket] Client left session room: session_{session_id}")
-    
+
     def start_session_tracking(self, session_id: str, mode: str):
-        """Start tracking for a specific session"""
         print(f"[DEBUG] start_session_tracking called: session_id={session_id}, mode={mode}")
         with self.session_lock:
             if session_id not in self.session_trackers:
@@ -1808,8 +1562,7 @@ class RealtimeExtension:
                 self.session_trackers[session_id] = tracker
                 print(f"[Session] Started tracking for session: {session_id} (mode: {mode})")
                 print(f"[DEBUG] Active session trackers: {list(self.session_trackers.keys())}")
-                
-                # Start stats emission thread if not running
+
                 if not self._session_stats_running:
                     self._session_stats_running = True
                     self._session_stats_thread = threading.Thread(
@@ -1820,47 +1573,42 @@ class RealtimeExtension:
                     print(f"[DEBUG] Stats emission thread started")
             else:
                 print(f"[DEBUG] Session {session_id} already exists in trackers")
-    
+
     def stop_session_tracking(self, session_id: str):
-        """Stop tracking for a specific session"""
         with self.session_lock:
             if session_id in self.session_trackers:
                 del self.session_trackers[session_id]
                 print(f"[Session] Stopped tracking for session: {session_id}")
-    
+
     def process_session_event(self, event: Dict, session_id: str):
-        """Process an event for a specific session"""
         with self.session_lock:
             if session_id in self.session_trackers:
                 self.session_trackers[session_id].process_event(event)
             else:
-                # Debug: session not found
                 if not hasattr(self, '_session_not_found_logged'):
                     self._session_not_found_logged = set()
                 if session_id not in self._session_not_found_logged:
                     print(f"[Warning] Session {session_id} not found in trackers. Available: {list(self.session_trackers.keys())}")
                     self._session_not_found_logged.add(session_id)
-    
+
     def _emit_session_stats_loop(self):
-        """Background thread to emit session stats every 0.5 seconds to reduce sample loss"""
         print(f"[DEBUG] _emit_session_stats_loop started (0.5s interval)")
         iteration = 0
         while self._session_stats_running:
-            time.sleep(0.5)  # Changed from 1s to 0.5s for batching
+            time.sleep(0.5)
             iteration += 1
 
             with self.session_lock:
-                if iteration <= 6:  # Debug first 6 iterations (3 seconds worth)
+                if iteration <= 6:
                     print(f"[DEBUG] Emit iteration #{iteration}, active sessions: {list(self.session_trackers.keys())}")
 
                 for session_id, tracker in list(self.session_trackers.items()):
                     try:
                         stats = tracker.get_stats()
 
-                        if iteration <= 6:  # Debug first 6 iterations
+                        if iteration <= 6:
                             print(f"[DEBUG] Emitting stats for {session_id}: total_events={stats['total_events']}, total_packets={stats['total_packets']}")
 
-                        # Emit to session-specific room
                         self.socketio.emit('session_stats_update', {
                             'session_id': session_id,
                             'stats': stats
@@ -1872,8 +1620,7 @@ class RealtimeExtension:
 
 
 def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
-    """Add realtime API routes to Flask app (for backward compatibility)"""
-    
+
     @app.route('/api/realtime/enable', methods=['POST'])
     def enable_realtime_compat():
         try:
@@ -1883,7 +1630,7 @@ def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
                 return jsonify({'error': 'Failed to start realtime tracer'}), 500
         except Exception as e:
             return jsonify({'error': str(e)}), 500
-    
+
     @app.route('/api/realtime/disable', methods=['POST'])
     def disable_realtime_compat():
         try:
@@ -1891,7 +1638,7 @@ def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
             return jsonify({'status': 'disabled'})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
-    
+
     @app.route('/api/realtime/stats', methods=['GET'])
     def get_realtime_stats_compat():
         try:
@@ -1899,7 +1646,7 @@ def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
             return jsonify(stats)
         except Exception as e:
             return jsonify({'error': str(e)}), 500
-    
+
     @app.route('/api/realtime/reset', methods=['POST'])
     def reset_realtime_stats_compat():
         try:
@@ -1907,16 +1654,13 @@ def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
             return jsonify({'status': 'reset'})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
-    
+
     print("[✓] Realtime API routes registered: /api/realtime/{enable,disable,stats,reset}")
 
-# ============================================
-# MAIN
-# ============================================
 
 def main():
     import argparse
-    
+
     parser = argparse.ArgumentParser(description='Realtime Packet Tracer Backend - Final Version')
     parser.add_argument('--port', '-p', type=int, default=5000,
                        help='Flask port (default: 5000)')
@@ -1924,15 +1668,15 @@ def main():
                        help='Flask host (default: 0.0.0.0)')
     parser.add_argument('--auto-start', action='store_true',
                        help='Auto-start tracing on launch')
-    parser.add_argument('--bpf-code', 
+    parser.add_argument('--bpf-code',
                        help='Path to BPF code')
-    
+
     args = parser.parse_args()
-    
+
     if os.geteuid() != 0:
         print("[!] This script requires root privileges")
         sys.exit(1)
-    
+
     print(f"""
 ╔══════════════════════════════════════════════╗
 ║   Realtime Packet Tracer Backend v2.0        ║
@@ -1950,7 +1694,7 @@ def main():
     - POST /api/stop
     - GET  /api/stats
     - POST /api/reset
-    
+
     NEW ROUTES (realtime frontend):
     - POST /api/realtime/enable
     - POST /api/realtime/disable
@@ -1960,7 +1704,7 @@ def main():
 [*] Open browser at http://{args.host}:{args.port}/
 [*] Press Ctrl+C to stop
 """)
-    
+
     if args.auto_start:
         print("[*] Auto-starting tracer...")
         global tracer
@@ -1969,13 +1713,12 @@ def main():
             print("[✓] Tracer auto-started")
         else:
             print("[✗] Failed to auto-start tracer")
-    
+
     try:
-        # FIX: Use allow_unsafe_werkzeug to prevent assertion errors
         socketio.run(
-            app, 
-            host=args.host, 
-            port=args.port, 
+            app,
+            host=args.host,
+            port=args.port,
             debug=False,
             allow_unsafe_werkzeug=True
         )
