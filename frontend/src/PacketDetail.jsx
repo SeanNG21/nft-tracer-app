@@ -372,6 +372,7 @@ const PacketDetail = ({ packet, onClose }) => {
                   {event.chain_addr && <span><strong>Chain Addr:</strong> {event.chain_addr}</span>}
                   {event.rule_seq !== undefined && event.rule_seq !== 0 && <span><strong>Rule Seq:</strong> {event.rule_seq}</span>}
                   {event.rule_handle !== undefined && event.rule_handle !== 0 && <span><strong>Rule Handle:</strong> {event.rule_handle}</span>}
+                  {event.rule_text && <span><strong>Rule:</strong> <code style={{backgroundColor: '#f0f0f0', padding: '2px 6px', borderRadius: '3px', fontSize: '0.95em'}}>{event.rule_text}</code></span>}
                   {event.expr_addr && <span><strong>Expression Addr:</strong> {event.expr_addr}</span>}
                   <span><strong>CPU:</strong> {event.cpu_id}</span>
                   {event.comm && <span><strong>Comm:</strong> {event.comm}</span>}

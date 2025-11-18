@@ -590,8 +590,10 @@ class PacketTrace:
             self.src_port = event.src_port if event.src_port > 0 else None
             self.dst_port = event.dst_port if event.dst_port > 0 else None
     
-    def add_nft_event(self, event: NFTEvent):
+    def add_nft_event(self, event: NFTEvent, rule_mapping: Dict[int, str] = None):
         """Add NFT rule evaluation event with deduplication support"""
+        if rule_mapping is None:
+            rule_mapping = {}
 
         # FIX: Deduplicate events - check if same expr_addr within time window
         # This prevents logging the same expression evaluation multiple times
@@ -632,6 +634,11 @@ class PacketTrace:
                 self.hook = event.hook
             return  # Skip adding to events list
 
+        # Lookup rule_text from rule_mapping
+        rule_text = None
+        if event.rule_handle and event.rule_handle != 0:
+            rule_text = rule_mapping.get(event.rule_handle)
+
         event_dict = {
             'timestamp': event.timestamp,
             'trace_type': self._trace_type_str(event.trace_type),
@@ -640,6 +647,7 @@ class PacketTrace:
             'verdict_raw': event.verdict_raw,  # FIX: Include raw verdict for debugging
             'rule_seq': event.rule_seq,
             'rule_handle': event.rule_handle,  # FIX: Always include, even if 0
+            'rule_text': rule_text,  # Add rule_text from nftables ruleset
             'expr_addr': hex(event.expr_addr) if event.expr_addr > 0 else None,  # FIX: Add expr_addr
             'chain_addr': hex(event.chain_addr) if event.chain_addr > 0 else None,  # FIX: Add chain_addr
             'chain_depth': event.chain_depth, 'cpu_id': event.cpu_id,
@@ -1044,9 +1052,38 @@ class TraceSession:
         # Packets typically complete within milliseconds, so 1s is more than enough
         self.trace_timeout_ns = 1 * 1_000_000_000
 
+        # NFTables rule mapping: rule_handle -> rule_text
+        self.rule_mapping: Dict[int, str] = {}
+        self._load_rule_mapping()
+
         print(f"[DEBUG] Session {session_id} created in {mode.upper()} mode")
         print(f"[DEBUG] Excluded ports (no self-tracing): {sorted(EXCLUDED_PORTS)}")
-    
+
+    def _load_rule_mapping(self):
+        """Load nftables ruleset and create rule_handle -> rule_text mapping"""
+        try:
+            success, ruleset, error = NFTablesManager.get_ruleset()
+            if not success:
+                print(f"[WARNING] Failed to load nftables ruleset: {error}")
+                return
+
+            # Parse ruleset to tree structure
+            tree = NFTablesManager.parse_ruleset_to_tree(ruleset)
+
+            # Build mapping: rule_handle -> rule_text
+            for family, tables in tree.items():
+                for table_name, table_data in tables.items():
+                    for chain_name, chain_data in table_data.get('chains', {}).items():
+                        for rule in chain_data.get('rules', []):
+                            rule_handle = rule.get('handle')
+                            rule_text = rule.get('rule_text', '<no rule text>')
+                            if rule_handle:
+                                self.rule_mapping[rule_handle] = rule_text
+
+            print(f"[DEBUG] Loaded {len(self.rule_mapping)} nftables rules")
+        except Exception as e:
+            print(f"[WARNING] Error loading rule mapping: {e}")
+
     def start(self) -> bool:
         if not BCC_AVAILABLE:
             return False
@@ -1482,7 +1519,7 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                 )
 
             trace = self.packet_traces[packet_key]
-            trace.add_nft_event(nft_event)
+            trace.add_nft_event(nft_event, self.rule_mapping)
 
             # FIX: Cleanup on terminal verdicts DROP/STOLEN regardless of chain_depth
             # DROP (0) and STOLEN (2) are terminal verdicts that END packet lifecycle
@@ -1596,7 +1633,7 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                     rule_handle=event.rule_handle,
                     comm=event.comm.decode('utf-8', errors='ignore')
                 )
-                trace.add_nft_event(nft_event)
+                trace.add_nft_event(nft_event, self.rule_mapping)
 
                 # === REALTIME: Send NFT verdict event (ALWAYS for session tracking) ===
                 if REALTIME_AVAILABLE and realtime:
@@ -1766,7 +1803,7 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                     rule_handle=event.rule_handle,
                     comm=event.comm.decode('utf-8', errors='ignore')
                 )
-                trace.add_nft_event(nft_event)
+                trace.add_nft_event(nft_event, self.rule_mapping)
 
                 # FIX: Cleanup on terminal verdicts regardless of chain_depth
                 # Same logic: DROP/STOLEN are terminal, cleanup immediately
