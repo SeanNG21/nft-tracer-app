@@ -459,6 +459,19 @@ int kretprobe__nf_hook_slow(struct pt_regs *ctx)
         evt.has_queue_bypass = ((rax_u32 & 0x8000u) ? 1 : 0);
     }
 
+    // CRITICAL FIX: Get skb_addr from skb_info_map to track final verdict per packet
+    struct trace_event *stored = skb_info_map.lookup(&tid);
+    if (stored) {
+        evt.skb_addr = stored->skb_addr;
+        evt.hook = stored->hook;
+        evt.pf = stored->pf;
+        evt.protocol = stored->protocol;
+        evt.src_ip = stored->src_ip;
+        evt.dst_ip = stored->dst_ip;
+        evt.src_port = stored->src_port;
+        evt.dst_port = stored->dst_port;
+    }
+
     read_comm_safe(evt.comm, sizeof(evt.comm));
     events.perf_submit(ctx, &evt, sizeof(evt));
 

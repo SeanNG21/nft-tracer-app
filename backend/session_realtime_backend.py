@@ -569,14 +569,16 @@ class SessionRealtimeStats:
 
             # VERDICT FILTERING LOGIC - Giống y nguyên RealtimeStats
             # Support both NFT events and function trace events:
-            # 1. If trace_type exists (NFT events): ONLY count from "chain_exit" events
+            # 1. If trace_type exists (NFT events): Count from "chain_exit" and "hook_exit" (nf_hook_slow verdict)
             # 2. If no trace_type (function trace events): Count from netfilter functions with deduplication
             verdict_to_count = None
             if verdict_name and verdict_name != 'UNKNOWN':
                 if trace_type:
-                    # Case 1: NFT events with trace_type (session events from nft_tracer.bpf.c)
-                    # ONLY count chain_exit to avoid double-counting from rule_eval/hook_exit
-                    if trace_type == 'chain_exit':
+                    # Case 1: NFT events with trace_type (session events from nft_tracer.bpf.c / full_tracer.bpf.c)
+                    # - chain_exit: verdict from nft_do_chain (when chain returns)
+                    # - hook_exit: verdict from nf_hook_slow return value (final netfilter verdict)
+                    # ONLY count these to avoid double-counting from rule_eval
+                    if trace_type in ['chain_exit', 'hook_exit']:
                         verdict_to_count = verdict_name
                 else:
                     # Case 2: Function trace events without trace_type (from full_tracer.bpf.c)
