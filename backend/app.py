@@ -1406,20 +1406,40 @@ def list_sessions():
 
 @app.route('/api/sessions', methods=['POST'])
 def create_session():
-    data = request.json
-    session_id = data.get('session_id', f"trace_{int(time.time() * 1000)}")
-    mode = data.get('mode', 'nft')
+    try:
+        print(f"[DEBUG] Received POST /api/sessions")
+        print(f"[DEBUG] Content-Type: {request.content_type}")
+        print(f"[DEBUG] Request data: {request.data}")
 
-    if mode not in ['nft', 'full']:
-        return jsonify({'error': 'Invalid mode. Use: nft or full'}), 400
+        data = request.json
+        if data is None:
+            print(f"[ERROR] request.json is None - invalid JSON or missing Content-Type header")
+            return jsonify({'error': 'Invalid JSON or missing Content-Type: application/json header'}), 400
 
-    success = session_manager.create_session(
-        session_id, mode, data.get('pcap_filter', ''), data.get('max_functions', 50)
-    )
+        print(f"[DEBUG] Parsed JSON: {data}")
+        session_id = data.get('session_id', f"trace_{int(time.time() * 1000)}")
+        mode = data.get('mode', 'nft')
 
-    if success:
-        return jsonify({'status': 'started', 'session_id': session_id, 'mode': mode}), 201
-    return jsonify({'error': 'Failed to start'}), 400
+        if mode not in ['nft', 'full']:
+            return jsonify({'error': 'Invalid mode. Use: nft or full'}), 400
+
+        print(f"[DEBUG] Creating session: {session_id}, mode: {mode}")
+        success = session_manager.create_session(
+            session_id, mode, data.get('pcap_filter', ''), data.get('max_functions', 50)
+        )
+
+        if success:
+            print(f"[✓] Session created successfully: {session_id}")
+            return jsonify({'status': 'started', 'session_id': session_id, 'mode': mode}), 201
+
+        print(f"[ERROR] Failed to create session: {session_id}")
+        return jsonify({'error': 'Failed to start session - BPF initialization failed'}), 400
+
+    except Exception as e:
+        print(f"[ERROR] Exception in create_session: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/sessions/<session_id>', methods=['DELETE'])
 def stop_session(session_id):
