@@ -1419,9 +1419,14 @@ class SessionStatsTracker:
             if self.total_events <= 5:
                 print(f"[SessionStats {self.session_id}] Event #{self.total_events}: hook={event.get('hook')}, func={event.get('func_name', 'N/A')}, verdict={event.get('verdict', 255)}, type={event.get('event_type', 'normal')}")
 
+            # Extract trace_type for NFT events (0=chain_exit, 1=rule_eval, 2=hook_exit)
+            trace_type = event.get('trace_type', -1)
+
             # Debug: Log ALL NFT events to track verdict distribution
             if event.get('func_name') == 'nft_do_chain':
-                print(f"[SessionStats {self.session_id}] NFT EVENT: hook={event.get('hook')} ({hook_name}), verdict={event.get('verdict')} ({verdict_name}), mode={self.mode}")
+                trace_type_names = {0: 'chain_exit', 1: 'rule_eval', 2: 'hook_exit'}
+                trace_type_name = trace_type_names.get(trace_type, 'unknown')
+                print(f"[SessionStats {self.session_id}] NFT EVENT: hook={event.get('hook')} ({hook_name}), verdict={event.get('verdict')} ({verdict_name}), trace_type={trace_type} ({trace_type_name}), mode={self.mode}")
 
             # Check if multifunction mode
             is_multifunction = event.get('event_type') == 'multifunction'
@@ -1467,8 +1472,15 @@ class SessionStatsTracker:
             layer_stats = hook_stats['layers'][layer_name]
             layer_stats['packets_in'] += 1
 
-            # Track verdict (skip UNKNOWN for function events)
-            if verdict_name != 'UNKNOWN':
+            # Track verdict (ONLY for rule_eval, skip chain_exit/hook_exit to avoid duplicates)
+            # trace_type: 0=chain_exit, 1=rule_eval, 2=hook_exit
+            # For NFT events: only count rule_eval (trace_type=1)
+            # For non-NFT events: count all verdicts (trace_type=-1)
+            should_track_verdict = verdict_name != 'UNKNOWN' and (
+                (func_name == 'nft_do_chain' and trace_type == 1) or  # NFT: only rule_eval
+                (func_name != 'nft_do_chain')  # Non-NFT: all verdicts
+            )
+            if should_track_verdict:
                 layer_stats['verdict_breakdown'][verdict_name] += 1
 
             # Track function
@@ -1506,7 +1518,9 @@ class SessionStatsTracker:
 
                 # Debug: Log layer mapping for NFT events
                 if func_name == 'nft_do_chain':
-                    print(f"[SessionStats {self.session_id}] NFT TRACKING: func={func_name}, hook={hook_num} ({hook_name}), verdict={verdict_name}, pipeline_layer={pipeline_layer}")
+                    trace_type_names = {0: 'chain_exit', 1: 'rule_eval', 2: 'hook_exit'}
+                    trace_type_name = trace_type_names.get(trace_type, 'unknown')
+                    print(f"[SessionStats {self.session_id}] NFT TRACKING: func={func_name}, hook={hook_num} ({hook_name}), verdict={verdict_name}, trace_type={trace_type} ({trace_type_name}), pipeline_layer={pipeline_layer}")
 
                 # Detect direction
                 direction = self._detect_direction(hook_name, layer_name, func_name, hook_num)
@@ -1540,19 +1554,24 @@ class SessionStatsTracker:
                         for key in oldest_keys:
                             del self.skb_tracking[key]
 
-                # Add event to node
+                # Add event to node (only track verdict for rule_eval)
+                # Pass verdict=None for chain_exit/hook_exit to avoid duplicate counting
+                verdict_to_track = verdict_name if should_track_verdict else None
                 node.add_event(
                     skb_addr=skb_addr,
                     latency_us=latency_us,
                     function=func_name,
-                    verdict=verdict_name,
+                    verdict=verdict_to_track,
                     error=(event.get('error_code', 0) > 0)
                 )
 
                 # Debug: Log verdict tracking to node
-                if verdict_name != 'UNKNOWN' and func_name == 'nft_do_chain':
+                if should_track_verdict and func_name == 'nft_do_chain':
                     current_breakdown = dict(node.verdict_breakdown) if node.verdict_breakdown else {}
-                    print(f"[SessionStats {self.session_id}] TRACKED to node '{pipeline_layer}': verdict={verdict_name}, current_breakdown={current_breakdown}")
+                    rule_handle = event.get('rule_handle', 0)
+                    print(f"[SessionStats {self.session_id}] TRACKED to node '{pipeline_layer}': verdict={verdict_name}, trace_type={trace_type} (rule_eval), rule_handle={rule_handle}, current_breakdown={current_breakdown}")
+                elif func_name == 'nft_do_chain' and not should_track_verdict:
+                    print(f"[SessionStats {self.session_id}] SKIPPED tracking to node '{pipeline_layer}': verdict={verdict_name}, trace_type={trace_type} (not rule_eval)")
 
             # Update total packets (count unique packets, not events)
             self.total_packets = max(self.total_packets, sum(h['packets_total'] for h in self.hooks.values()) // max(len(self.hooks), 1))

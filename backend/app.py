@@ -1603,10 +1603,14 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                 # === REALTIME: Send NFT verdict event (ALWAYS for session tracking) ===
                 if REALTIME_AVAILABLE and realtime:
                     try:
+                        # trace_type: 0=chain_exit, 1=rule_eval, 2=hook_exit
+                        trace_type = event.event_type - 1
                         realtime.process_session_event({
                             'hook': event.hook,
                             'func_name': 'nft_do_chain',
                             'verdict': event.verdict,
+                            'trace_type': trace_type,  # Add trace_type to distinguish rule_eval vs chain_exit
+                            'rule_handle': event.rule_handle if trace_type == 1 else 0,
                             'protocol': event.protocol,
                             'src_ip': trace._format_ip(event.src_ip),
                             'dst_ip': trace._format_ip(event.dst_ip),
