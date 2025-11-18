@@ -157,7 +157,9 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
               const pct = count > 0 ? ((vCount / count) * 100).toFixed(0) : 0;
               return pct > 0 ? (
                 <div key={verdict} className={`verdict-badge verdict-${verdict.toLowerCase()}`}>
-                  {verdict}: {pct}%
+                  <span className="verdict-name">{verdict}</span>
+                  <span className="verdict-count">{vCount.toLocaleString()}</span>
+                  <span className="verdict-pct">({pct}%)</span>
                 </div>
               ) : null;
             })}
