@@ -1572,9 +1572,29 @@ class SessionStatsTracker:
         self.nodes: Dict[str, NodeStats] = {}  # node_name -> NodeStats
         self.skb_tracking: Dict[str, Dict] = {}  # skb_addr -> {'first_ts': float, 'last_node': str}
         self.skb_paths: Dict[str, List[str]] = {}  # skb_addr -> [node1, node2, ...]
+        self.edges: Dict[tuple, EdgeStats] = {}  # (from, to) -> EdgeStats
         self.stats_by_direction_layer = {
             'Inbound': defaultdict(int),
             'Outbound': defaultdict(int)
+        }
+
+        # ENHANCED: Pipeline completion tracking with node definitions
+        self.pipeline_order = ['Inbound', 'Outbound', 'Local Delivery', 'Forward']
+        self.pipelines: Dict[str, PipelineStats] = {
+            'Inbound': PipelineStats(active_nodes={
+                'NIC', 'Driver (NAPI)', 'GRO', 'TC Ingress',
+                'Netfilter PREROUTING', 'Conntrack', 'NAT PREROUTING', 'Routing Decision'
+            }),
+            'Outbound': PipelineStats(active_nodes={
+                'Application', 'TCP/UDP Output', 'Netfilter OUTPUT',
+                'Routing Lookup', 'NAT POSTROUTING', 'TC Egress', 'Driver TX'
+            }),
+            'Local Delivery': PipelineStats(active_nodes={
+                'Netfilter INPUT', 'TCP/UDP', 'Socket'
+            }),
+            'Forward': PipelineStats(active_nodes={
+                'Netfilter FORWARD', 'Netfilter POSTROUTING', 'NIC TX'
+            })
         }
 
         # Multifunction-specific stats
@@ -1593,7 +1613,29 @@ class SessionStatsTracker:
         if node_name not in self.nodes:
             self.nodes[node_name] = NodeStats()
         return self.nodes[node_name]
-    
+
+    def add_edge(self, from_node: str, to_node: str):
+        """Track an edge (transition) between two nodes"""
+        edge_key = (from_node, to_node)
+        if edge_key not in self.edges:
+            self.edges[edge_key] = EdgeStats(from_node=from_node, to_node=to_node)
+        self.edges[edge_key].count += 1
+
+    def _track_pipeline_membership(self, skb_addr: str, node_name: str):
+        """
+        Track which pipelines this SKB has entered.
+
+        Rules:
+        - started: Count of unique SKBs that entered ANY node of this pipeline
+        - in_flight: Real-time count from nodes (calculated from node.in_flight_packets)
+        - completed: started - in_flight (packets that left the pipeline)
+        """
+        # Check which pipelines this node belongs to
+        for pipeline_name, pipeline_stats in self.pipelines.items():
+            if node_name in pipeline_stats.active_nodes:
+                # Add this SKB to the pipeline's unique set
+                pipeline_stats.unique_skbs.add(skb_addr)
+
     def process_event(self, event: Dict):
         """Process a single event"""
         with self.lock:
@@ -1720,6 +1762,38 @@ class SessionStatsTracker:
                     verdict=verdict_name,
                     error=(event.get('error_code', 0) > 0)
                 )
+
+                # Track edges (transitions between nodes) and in-flight packets
+                if skb_addr:
+                    if skb_addr not in self.skb_paths:
+                        self.skb_paths[skb_addr] = []
+
+                    # If there's a previous node, create an edge and update in-flight tracking
+                    if self.skb_paths[skb_addr]:
+                        prev_node = self.skb_paths[skb_addr][-1]
+                        if prev_node != pipeline_layer:  # Avoid self-loops
+                            self.add_edge(prev_node, pipeline_layer)
+                            # Remove from previous node's in-flight set
+                            prev_node_stats = self.get_node(prev_node)
+                            prev_node_stats.in_flight_packets.discard(skb_addr)
+
+                    # Add packet to current node's in-flight set
+                    node.in_flight_packets.add(skb_addr)
+
+                    # Add current node to path
+                    self.skb_paths[skb_addr].append(pipeline_layer)
+
+                    # ENHANCED: Track pipeline membership (which pipelines this SKB has entered)
+                    self._track_pipeline_membership(skb_addr, pipeline_layer)
+
+                    # Limit path history and cleanup old SKB tracking
+                    if len(self.skb_paths) > 10000:
+                        oldest_keys = list(self.skb_paths.keys())[:1000]
+                        for key in oldest_keys:
+                            # Cleanup in-flight packets for stale SKBs
+                            for node_stats in self.nodes.values():
+                                node_stats.in_flight_packets.discard(key)
+                            del self.skb_paths[key]
 
             # Update total packets (count unique packets, not events)
             self.total_packets = max(self.total_packets, sum(h['packets_total'] for h in self.hooks.values()) // max(len(self.hooks), 1))
@@ -1888,10 +1962,60 @@ class SessionStatsTracker:
 
             # ENHANCED: Add nodes data for full mode (for enhanced pipeline visualization)
             if self.mode == 'full':
+                current_ts = time.time()
+
+                # Serialize nodes with packet rate calculation
                 nodes_data = {}
                 for node_name, node_stats in self.nodes.items():
-                    nodes_data[node_name] = node_stats.to_dict()
+                    nodes_data[node_name] = node_stats.to_dict(current_ts)
                 stats['nodes'] = nodes_data
+
+                # Serialize edges
+                edges_data = []
+                for edge_stats in self.edges.values():
+                    edges_data.append(edge_stats.to_dict())
+                stats['edges'] = edges_data
+
+                # Pipeline statistics (ORDERED for consistent display)
+                pipelines_data = []
+                for pipeline_name in self.pipeline_order:
+                    if pipeline_name in self.pipelines:
+                        pipeline_stats = self.pipelines[pipeline_name]
+                        pipeline_dict = pipeline_stats.to_dict(self.nodes)
+                        pipeline_dict['name'] = pipeline_name
+                        pipelines_data.append(pipeline_dict)
+                stats['pipelines'] = pipelines_data
+
+                # Calculate total verdict statistics across all netfilter nodes
+                total_verdicts = defaultdict(int)
+                for node_name, node_stats in self.nodes.items():
+                    if 'Netfilter' in node_name and node_stats.verdict_breakdown:
+                        for verdict, count in node_stats.verdict_breakdown.items():
+                            total_verdicts[verdict] += count
+                stats['total_verdicts'] = dict(total_verdicts)
+
+                # Top Latency Contributors (for latency hotspot panel)
+                latency_ranking = []
+                total_latency = 0
+                for node_name, node_stats in self.nodes.items():
+                    if node_stats.latencies_us:
+                        import numpy as np
+                        avg_latency = float(np.mean(node_stats.latencies_us))
+                        latency_ranking.append({
+                            'node': node_name,
+                            'avg_latency_us': round(avg_latency, 1),
+                            'count': len(node_stats.latencies_us)
+                        })
+                        total_latency += avg_latency
+
+                # Sort by latency descending and calculate percentage
+                latency_ranking.sort(key=lambda x: x['avg_latency_us'], reverse=True)
+                for item in latency_ranking[:10]:  # Top 10
+                    if total_latency > 0:
+                        item['percentage'] = round((item['avg_latency_us'] / total_latency) * 100, 1)
+                    else:
+                        item['percentage'] = 0
+                stats['top_latency'] = latency_ranking[:10]
 
             return stats
 
