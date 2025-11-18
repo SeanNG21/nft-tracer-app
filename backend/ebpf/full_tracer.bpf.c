@@ -56,17 +56,20 @@ BPF_HASH(hook_map, u64, struct hook_state, 10240);
 
 static __always_inline u32 decode_verdict(s32 raw_ret, u32 raw_u32)
 {
+    // Negative return values map to 10+ range
+    // Kernel: -NF_ACCEPT=-1, -NF_STOLEN=-2, -NF_QUEUE=-3, -NF_REPEAT=-4, -NF_STOP=-5
     if (raw_ret < 0) {
         switch (raw_ret) {
-            case -1: return 10;
-            case -2: return 11;
-            case -3: return 12;
-            case -4: return 13;
-            case -5: return 14;
-            default: return 0;
+            case -1: return 11;  // -NF_ACCEPT
+            case -2: return 12;  // -NF_STOLEN
+            case -3: return 13;  // -NF_QUEUE
+            case -4: return 14;  // -NF_REPEAT
+            case -5: return 15;  // -NF_STOP
+            default: return 0;   // Unknown negative, return DROP
         }
     }
-    
+
+    // Positive values: NF_DROP=0, NF_ACCEPT=1, NF_STOLEN=2, NF_QUEUE=3, NF_REPEAT=4, NF_STOP=5
     u32 verdict = raw_u32 & 0xFFu;
     if (verdict > 5) return 255;
     return verdict;

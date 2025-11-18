@@ -85,17 +85,21 @@ HOOK_LAYER_MAP = {
 LAYER_ORDER = ["Ingress", "L2", "IP", "Firewall", "Socket", "Egress"]
 
 VERDICT_MAP = {
-    0: "ACCEPT",
-    1: "DROP",
-    2: "STOLEN",
-    3: "QUEUE",
-    4: "REPEAT",
-    5: "STOP",
-    10: "DROP",
-    11: "STOLEN",
-    12: "QUEUE",
-    13: "REPEAT",
-    14: "STOP",
+    # Kernel netfilter verdicts (from linux/netfilter.h):
+    # NF_DROP = 0, NF_ACCEPT = 1, NF_STOLEN = 2, NF_QUEUE = 3, NF_REPEAT = 4, NF_STOP = 5
+    0: "DROP",      # NF_DROP
+    1: "ACCEPT",    # NF_ACCEPT
+    2: "STOLEN",    # NF_STOLEN
+    3: "QUEUE",     # NF_QUEUE
+    4: "REPEAT",    # NF_REPEAT
+    5: "STOP",      # NF_STOP
+    # Negative return values (converted by BPF to 10+)
+    10: "DROP",     # -NF_DROP (-0 = 0, but mapped to 10 for consistency)
+    11: "ACCEPT",   # -NF_ACCEPT (-1)
+    12: "STOLEN",   # -NF_STOLEN (-2)
+    13: "QUEUE",    # -NF_QUEUE (-3)
+    14: "REPEAT",   # -NF_REPEAT (-4)
+    15: "STOP",     # -NF_STOP (-5)
     255: "UNKNOWN"
 }
 
