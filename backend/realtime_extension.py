@@ -85,17 +85,19 @@ HOOK_LAYER_MAP = {
 LAYER_ORDER = ["Ingress", "L2", "IP", "Firewall", "Socket", "Egress"]
 
 VERDICT_MAP = {
-    0: "ACCEPT",
-    1: "DROP",
-    2: "STOLEN",
-    3: "QUEUE",
-    4: "REPEAT",
-    5: "STOP",
-    10: "DROP",
-    11: "STOLEN",
-    12: "QUEUE",
-    13: "REPEAT",
-    14: "STOP",
+    # Netfilter verdicts (NF_*)
+    0: "DROP",        # NF_DROP
+    1: "ACCEPT",      # NF_ACCEPT
+    2: "STOLEN",      # NF_STOLEN
+    3: "QUEUE",       # NF_QUEUE
+    4: "REPEAT",      # NF_REPEAT
+    5: "STOP",        # NF_STOP
+    # NFTables verdicts (NFT_*) - negative values encoded as 10-14 by BPF
+    10: "CONTINUE",   # NFT_CONTINUE (-1)
+    11: "BREAK",      # NFT_BREAK (-2)
+    12: "JUMP",       # NFT_JUMP (-3)
+    13: "GOTO",       # NFT_GOTO (-4)
+    14: "RETURN",     # NFT_RETURN (-5)
     255: "UNKNOWN"
 }
 

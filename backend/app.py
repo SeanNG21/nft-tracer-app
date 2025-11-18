@@ -23,6 +23,7 @@ import psutil
 
 from discovery.btf_skb_discoverer import BTFSKBDiscoverer
 from integrations.nftables_manager import NFTablesManager
+from multi_function_backend import VERDICT_NAMES
 
 try:
     from bcc import BPF
@@ -1704,9 +1705,9 @@ int trace_{idx}(struct pt_regs *ctx, struct sk_buff *skb) {{
                 hook_name = ['PREROUTING', 'INPUT', 'FORWARD', 'OUTPUT', 'POSTROUTING'][event.hook] if event.hook < 5 else 'UNKNOWN'
                 self.stats_by_hook[hook_name] += 1
 
-            # Update verdict statistics
+            # Update verdict statistics - now includes all verdict types (CONTINUE, BREAK, JUMP, GOTO, RETURN)
             if event.verdict != 255:
-                verdict_name = ['DROP', 'ACCEPT', 'STOLEN', 'QUEUE', 'REPEAT', 'STOP'][event.verdict] if event.verdict < 6 else 'UNKNOWN'
+                verdict_name = VERDICT_NAMES.get(event.verdict, 'UNKNOWN')
                 self.stats_by_verdict[verdict_name] += 1
 
             # Track function hits

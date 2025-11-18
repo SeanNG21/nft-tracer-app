@@ -25,8 +25,15 @@ EVENT_NF_HOOK = 3
 
 # Verdicts
 VERDICT_NAMES = {
+    # Netfilter verdicts (NF_*)
     0: 'DROP', 1: 'ACCEPT', 2: 'STOLEN', 3: 'QUEUE', 4: 'REPEAT', 5: 'STOP',
-    10: 'CONTINUE', 11: 'RETURN', 12: 'JUMP', 13: 'GOTO', 14: 'BREAK', 255: 'UNKNOWN'
+    # NFTables verdicts (NFT_*) - negative values encoded as 10-14 by BPF
+    10: 'CONTINUE',  # NFT_CONTINUE (-1)
+    11: 'BREAK',     # NFT_BREAK (-2)
+    12: 'JUMP',      # NFT_JUMP (-3)
+    13: 'GOTO',      # NFT_GOTO (-4)
+    14: 'RETURN',    # NFT_RETURN (-5)
+    255: 'UNKNOWN'
 }
 
 HOOK_NAMES = {
