@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import PacketList from './PacketList';
-import PacketDetail from './PacketDetail';
+import PacketList from '../components/Packet/PacketList';
+import PacketDetail from '../components/Packet/PacketDetail';
 import './TraceViewer.css';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
