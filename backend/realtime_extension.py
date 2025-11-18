@@ -302,8 +302,6 @@ class NodeStats:
     latencies_us: List[float] = field(default_factory=list)  # microseconds
     function_calls: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
     verdict_breakdown: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    # NEW: Track which SKBs have had verdict counted to prevent duplicates
-    verdict_counted_skbs: Dict[str, set] = field(default_factory=lambda: defaultdict(set))
     error_count: int = 0
     drop_count: int = 0
     truncated_count: int = 0
@@ -326,23 +324,14 @@ class NodeStats:
             self.latencies_us.append(latency_us)
         if function:
             self.function_calls[function] += 1
-        # CRITICAL FIX: Deduplicate verdict counting for packets with valid SKB address
-        # Same packet can trigger multiple events (nft_do_chain, nft_immediate_eval, nf_hook_slow)
-        # but verdict should only be counted once per SKB
-        if verdict:
-            # If we have a valid SKB address, use deduplication
-            if skb_addr and skb_addr != '':
-                if skb_addr not in self.verdict_counted_skbs[verdict]:
-                    self.verdict_breakdown[verdict] += 1
-                    self.verdict_counted_skbs[verdict].add(skb_addr)
-                    if verdict == 'DROP':
-                        self.drop_count += 1
-            else:
-                # No SKB address - count normally (for events without skb tracking)
-                # This handles edge cases where verdict is present but skb_addr is missing
-                self.verdict_breakdown[verdict] += 1
-                if verdict == 'DROP':
-                    self.drop_count += 1
+        # CRITICAL: Only count verdict from nft_immediate_eval
+        # This is the actual function that executes verdict actions per-rule
+        # Other functions (nft_do_chain, nf_hook_slow) just return overall verdict
+        # No deduplication needed - each rule only executes once per packet
+        if verdict and function == 'nft_immediate_eval':
+            self.verdict_breakdown[verdict] += 1
+            if verdict == 'DROP':
+                self.drop_count += 1
         if error:
             self.error_count += 1
 
