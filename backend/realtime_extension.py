@@ -388,16 +388,26 @@ class EdgeStats:
 @dataclass
 class PipelineStats:
     """Statistics for packet pipelines (Inbound, Outbound, Local Delivery, Forward)"""
-    started: int = 0  # packets that entered this pipeline
-    completed: int = 0  # packets that completed this pipeline
-    in_progress: set = field(default_factory=set)  # packets currently in this pipeline
+    unique_skbs: set = field(default_factory=set)  # all SKBs that ever entered this pipeline
     active_nodes: set = field(default_factory=set)  # nodes that belong to this pipeline
 
-    def to_dict(self) -> Dict:
+    def to_dict(self, nodes_dict: Dict[str, 'NodeStats']) -> Dict:
+        """
+        Calculate statistics from node-level data.
+
+        - started: Total unique SKBs that entered this pipeline (ever)
+        - in_flight: SKBs currently on nodes of this pipeline (real-time)
+        - completed: SKBs that entered but left this pipeline (started - in_flight)
+        """
+        started = len(self.unique_skbs)
+        in_flight = self.calculate_in_flight_from_nodes(nodes_dict)
+        completed = started - in_flight
+
         return {
-            'started': self.started,
-            'completed': self.completed,
-            'in_progress': len(self.in_progress)
+            'started': started,
+            'completed': completed,
+            'in_progress': in_flight,  # renamed from in_progress to match
+            'calculated_in_flight': in_flight
         }
 
     def calculate_in_flight_from_nodes(self, nodes_dict: Dict[str, 'NodeStats']) -> int:
@@ -548,6 +558,8 @@ class RealtimeStats:
         self.skb_paths: Dict[str, List[str]] = {}  # skb_addr -> [node1, node2, ...]
 
         # ENHANCED: Pipeline completion tracking with node definitions
+        # Define pipelines with their constituent nodes (ORDER MATTERS for display)
+        self.pipeline_order = ['Inbound', 'Outbound', 'Local Delivery', 'Forward']
         self.pipelines: Dict[str, PipelineStats] = {
             'Inbound': PipelineStats(active_nodes={
                 'NIC', 'Driver (NAPI)', 'GRO', 'TC Ingress',
@@ -555,7 +567,7 @@ class RealtimeStats:
             }),
             'Outbound': PipelineStats(active_nodes={
                 'Application', 'TCP/UDP Output', 'Netfilter OUTPUT',
-                'Routing Lookup', 'NAT POSTROUTING', 'TC Egress', 'Driver TX', 'NIC'
+                'Routing Lookup', 'NAT POSTROUTING', 'TC Egress', 'Driver TX'
             }),
             'Local Delivery': PipelineStats(active_nodes={
                 'Netfilter INPUT', 'TCP/UDP', 'Socket'
@@ -564,9 +576,6 @@ class RealtimeStats:
                 'Netfilter FORWARD', 'Netfilter POSTROUTING', 'NIC TX'
             })
         }
-
-        # Track which pipeline each SKB belongs to
-        self.skb_pipeline_membership: Dict[str, set] = {}  # skb_addr -> set of pipeline names
     
     def get_hook(self, hook_name: str) -> HookStats:
         if hook_name not in self.hooks:
@@ -673,66 +682,21 @@ class RealtimeStats:
 
         return layer_name
 
-    def _track_pipeline_progress(self, skb_addr: str, node_name: str, verdict: str):
+    def _track_pipeline_membership(self, skb_addr: str, node_name: str):
         """
-        Track pipeline start and completion based on node transitions.
-        REDESIGNED LOGIC to ensure consistency between node-level and pipeline-level metrics.
+        Track which pipelines this SKB has entered.
+        SIMPLIFIED LOGIC: Just track unique SKBs per pipeline.
 
         Rules:
-        1. A packet starts a pipeline when it enters the FIRST node of that pipeline
-        2. A packet completes a pipeline when it enters an EXIT node or gets DROPped
-        3. in_progress = packets currently traversing this pipeline (started but not completed)
-        4. Each SKB can be in multiple pipelines simultaneously (e.g., Inbound + Local Delivery)
+        - started: Count of unique SKBs that entered ANY node of this pipeline
+        - in_flight: Real-time count from nodes (calculated from node.in_flight_packets)
+        - completed: started - in_flight (packets that left the pipeline)
         """
-
-        # Define pipeline entry and exit nodes (CORRECTED LOGIC)
-        PIPELINE_ENTRY_NODES = {
-            'Inbound': {'NIC'},  # Inbound starts when packet arrives at NIC
-            'Outbound': {'Application'},  # Outbound starts at application layer
-            'Local Delivery': {'Netfilter INPUT'},  # Local Delivery starts after routing decision (INPUT)
-            'Forward': {'Netfilter FORWARD'}  # Forward starts after routing decision (FORWARD)
-        }
-
-        PIPELINE_EXIT_NODES = {
-            'Inbound': {'Netfilter INPUT', 'Netfilter FORWARD'},  # Inbound ends when routing decision is made
-            'Outbound': {'NIC'},  # Outbound ends when packet is transmitted
-            'Local Delivery': {'Socket'},  # Local Delivery ends at socket
-            'Forward': {'NIC TX'}  # Forward ends when forwarded packet is transmitted
-        }
-
-        # Initialize pipeline membership for this SKB if not exists
-        if skb_addr not in self.skb_pipeline_membership:
-            self.skb_pipeline_membership[skb_addr] = set()
-
-        # Track pipeline STARTS (only when entering entry node for the first time)
-        for pipeline_name, entry_nodes in PIPELINE_ENTRY_NODES.items():
-            if node_name in entry_nodes:
-                pipeline_stats = self.pipelines[pipeline_name]
-                # Only start if this SKB hasn't already started this pipeline
-                if pipeline_name not in self.skb_pipeline_membership[skb_addr]:
-                    pipeline_stats.started += 1
-                    pipeline_stats.in_progress.add(skb_addr)
-                    self.skb_pipeline_membership[skb_addr].add(pipeline_name)
-
-        # Track pipeline COMPLETIONS (when entering exit node)
-        for pipeline_name, exit_nodes in PIPELINE_EXIT_NODES.items():
-            if node_name in exit_nodes:
-                pipeline_stats = self.pipelines[pipeline_name]
-                # Only complete if this SKB is currently in progress for this pipeline
-                if skb_addr in pipeline_stats.in_progress:
-                    pipeline_stats.completed += 1
-                    pipeline_stats.in_progress.discard(skb_addr)
-                    # Remove from membership
-                    self.skb_pipeline_membership[skb_addr].discard(pipeline_name)
-
-        # Handle DROP verdict - complete all pipelines this packet is currently in
-        if verdict == 'DROP':
-            for pipeline_name, pipeline_stats in self.pipelines.items():
-                if skb_addr in pipeline_stats.in_progress:
-                    pipeline_stats.completed += 1
-                    pipeline_stats.in_progress.discard(skb_addr)
-            # Clear all pipeline memberships for this SKB
-            self.skb_pipeline_membership[skb_addr].clear()
+        # Check which pipelines this node belongs to
+        for pipeline_name, pipeline_stats in self.pipelines.items():
+            if node_name in pipeline_stats.active_nodes:
+                # Add this SKB to the pipeline's unique set
+                pipeline_stats.unique_skbs.add(skb_addr)
 
     def process_event(self, event: PacketEvent):
         """Process a single packet event and update statistics"""
@@ -789,16 +753,8 @@ class RealtimeStats:
                 # Add current node to path
                 self.skb_paths[event.skb_addr].append(pipeline_layer)
 
-                # ENHANCED: Track pipeline start/completion
-                self._track_pipeline_progress(event.skb_addr, pipeline_layer, event.verdict_name)
-
-                # CLEANUP: Remove in-flight tracking when packet completes or drops
-                if event.verdict_name == 'DROP' or event.verdict_name == 'ACCEPT':
-                    # Check if packet has completed all its pipelines
-                    if event.skb_addr not in self.skb_pipeline_membership or \
-                       len(self.skb_pipeline_membership.get(event.skb_addr, set())) == 0:
-                        # Remove from current node's in-flight
-                        node.in_flight_packets.discard(event.skb_addr)
+                # ENHANCED: Track pipeline membership (which pipelines this SKB has entered)
+                self._track_pipeline_membership(event.skb_addr, pipeline_layer)
 
                 # Limit path history and cleanup old SKB tracking
                 if len(self.skb_paths) > 10000:
@@ -807,8 +763,6 @@ class RealtimeStats:
                         # Cleanup in-flight packets for stale SKBs
                         for node_stats in self.nodes.values():
                             node_stats.in_flight_packets.discard(key)
-                        # Cleanup pipeline membership
-                        self.skb_pipeline_membership.pop(key, None)
                         del self.skb_paths[key]
             
             # Accept event even if layer not in strict map - this helps capture more data
@@ -893,20 +847,15 @@ class RealtimeStats:
             for edge_stats in self.edges.values():
                 edges_data.append(edge_stats.to_dict())
 
-            # ENHANCED: Pipeline statistics with calculated in-flight from nodes
-            pipelines_data = {}
-            for pipeline_name, pipeline_stats in self.pipelines.items():
-                pipeline_dict = pipeline_stats.to_dict()
-                # CRITICAL: Calculate actual in-flight from nodes belonging to this pipeline
-                calculated_in_flight = pipeline_stats.calculate_in_flight_from_nodes(self.nodes)
-                pipeline_dict['calculated_in_flight'] = calculated_in_flight
-                # Add debug info to verify consistency
-                pipeline_dict['debug_info'] = {
-                    'in_progress_skb_count': len(pipeline_stats.in_progress),
-                    'nodes_in_pipeline': list(pipeline_stats.active_nodes),
-                    'consistency_check': 'OK' if len(pipeline_stats.in_progress) == calculated_in_flight else 'MISMATCH'
-                }
-                pipelines_data[pipeline_name] = pipeline_dict
+            # ENHANCED: Pipeline statistics (ORDERED for consistent display)
+            # Use OrderedDict to maintain order from pipeline_order list
+            pipelines_data = []
+            for pipeline_name in self.pipeline_order:
+                if pipeline_name in self.pipelines:
+                    pipeline_stats = self.pipelines[pipeline_name]
+                    pipeline_dict = pipeline_stats.to_dict(self.nodes)
+                    pipeline_dict['name'] = pipeline_name
+                    pipelines_data.append(pipeline_dict)
 
             # Calculate total verdict statistics across all netfilter nodes
             total_verdicts = defaultdict(int)
@@ -960,7 +909,7 @@ class RealtimeStats:
                 }),
                 'Outbound': PipelineStats(active_nodes={
                     'Application', 'TCP/UDP Output', 'Netfilter OUTPUT',
-                    'Routing Lookup', 'NAT POSTROUTING', 'TC Egress', 'Driver TX', 'NIC'
+                    'Routing Lookup', 'NAT POSTROUTING', 'TC Egress', 'Driver TX'
                 }),
                 'Local Delivery': PipelineStats(active_nodes={
                     'Netfilter INPUT', 'TCP/UDP', 'Socket'
@@ -969,8 +918,6 @@ class RealtimeStats:
                     'Netfilter FORWARD', 'Netfilter POSTROUTING', 'NIC TX'
                 })
             }
-            # ENHANCED: Reset SKB pipeline membership tracking
-            self.skb_pipeline_membership.clear()
 
 # ============================================
 # HELPER FUNCTIONS
