@@ -3,6 +3,8 @@ import axios from 'axios';
 import io from 'socket.io-client';
 import './Realtime.css';
 import { getNodeDescription } from './PipelineNodeDescriptions';
+import HistoryChart from './components/HistoryChart';
+import AlertNotification from './components/AlertNotification';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
 const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 'http://localhost:5000';
@@ -363,6 +365,9 @@ function RealtimeView() {
 
   return (
     <div className="realtime-container">
+      {/* Alert Notifications (top-right corner) */}
+      <AlertNotification enabled={enabled} />
+
       {/* Header */}
       <div className="realtime-header">
         <div className="realtime-header-left">
@@ -514,6 +519,9 @@ function RealtimeView() {
               </div>
             </div>
           )}
+
+          {/* NEW: Historical Metrics & Timeline Charts */}
+          <HistoryChart enabled={enabled} />
 
           {/* NEW: Top Latency Contributors Panel */}
           {stats && stats.top_latency && stats.top_latency.length > 0 && (
