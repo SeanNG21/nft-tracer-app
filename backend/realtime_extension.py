@@ -1696,14 +1696,45 @@ class SessionStatsTracker:
                 print(f"[SessionStats {self.session_id}] Verdict event #{self.total_events}: "
                       f"func={func_name}, verdict={verdict_name} ({verdict}), hook={hook_name}, trace_type={trace_type}")
 
-            # CRITICAL FIX: Only count verdict from "chain_exit" events
-            # chain_exit = final verdict when packet exits an nftables chain
-            # This prevents double-counting from rule_eval and hook_exit events
-            if verdict != 255 and verdict_name != 'UNKNOWN' and trace_type == 'chain_exit':
-                layer_stats['verdict_breakdown'][verdict_name] += 1
+            # VERDICT COUNTING LOGIC - Support both NFT events and function trace events:
+            # 1. If trace_type exists (NFT events): ONLY count from "chain_exit" events
+            # 2. If no trace_type (function trace events from global realtime): Count from netfilter functions with deduplication
+            if verdict != 255 and verdict_name != 'UNKNOWN':
+                should_count = False
 
-                if self.total_events <= 10:
-                    print(f"[SessionStats {self.session_id}] ✓ Verdict counted: {verdict_name} (trace_type={trace_type})")
+                if trace_type:
+                    # Case 1: NFT events with trace_type (session events from nft_tracer.bpf.c)
+                    # ONLY count chain_exit to avoid double-counting from rule_eval/hook_exit
+                    if trace_type == 'chain_exit':
+                        should_count = True
+                        if self.total_events <= 10:
+                            print(f"[SessionStats {self.session_id}] ✓ Verdict counted: {verdict_name} (trace_type=chain_exit)")
+                else:
+                    # Case 2: Function trace events without trace_type (global realtime from full_tracer.bpf.c)
+                    # Count from netfilter functions with per-packet deduplication
+                    is_netfilter = any(kw in func_name.lower() for kw in ['nf_', 'nft_', 'netfilter']) if func_name else False
+                    if is_netfilter:
+                        # Initialize counted_verdicts set if not exists
+                        if 'counted_verdicts' not in layer_stats:
+                            layer_stats['counted_verdicts'] = set()
+
+                        # Deduplicate by (skb_addr, verdict) - count each verdict once per packet
+                        verdict_key = (skb_addr, verdict_name)
+                        if verdict_key not in layer_stats['counted_verdicts']:
+                            should_count = True
+                            layer_stats['counted_verdicts'].add(verdict_key)
+
+                            # Cleanup to prevent memory bloat
+                            if len(layer_stats['counted_verdicts']) > 10000:
+                                old_entries = list(layer_stats['counted_verdicts'])[:2000]
+                                for entry in old_entries:
+                                    layer_stats['counted_verdicts'].discard(entry)
+
+                            if self.total_events <= 10:
+                                print(f"[SessionStats {self.session_id}] ✓ Verdict counted: {verdict_name} from {func_name} (no trace_type, deduplicated)")
+
+                if should_count:
+                    layer_stats['verdict_breakdown'][verdict_name] += 1
 
             # Track function
             if func_name:
