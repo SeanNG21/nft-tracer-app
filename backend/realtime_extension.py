@@ -309,16 +309,17 @@ class NodeStats:
     last_ts: Optional[float] = None
     in_flight_packets: set = field(default_factory=set)  # packets currently on this node
 
-    # For verdict deduplication (track unique verdicts per packet)
-    counted_verdicts: set = field(default_factory=set)  # (skb_addr, verdict) pairs
-
     # For packet rate calculation
     previous_count: int = 0
     previous_ts: Optional[float] = None
 
     def add_event(self, skb_addr: str, latency_us: float = 0, function: str = None,
                   verdict: str = None, error: bool = False):
-        """Add an event to this node's statistics"""
+        """Add an event to this node's statistics
+
+        Note: Verdict should only be passed if trace_type == "chain_exit"
+        to avoid double-counting. Caller is responsible for filtering.
+        """
         self.count += 1
         # Only track unique SKBs if skb_addr is valid (not empty/None)
         if skb_addr and skb_addr != '':
@@ -328,28 +329,11 @@ class NodeStats:
         if function:
             self.function_calls[function] += 1
 
-        # UPDATED: Count verdict from ANY netfilter function with deduplication
-        # Accept verdict from: nft_immediate_eval (preferred), nf_hook_slow, nft_do_chain, or any nf_/nft_ function
-        # Use deduplication to avoid counting same verdict multiple times for same packet
+        # Count verdict if provided (caller must filter by trace_type == "chain_exit")
         if verdict and verdict != 'UNKNOWN':
-            # Check if this is a netfilter-related function or no function (direct hook event)
-            is_netfilter = not function or any(kw in function.lower() for kw in ['nf_', 'nft_', 'netfilter'])
-
-            if is_netfilter:
-                # Deduplicate: only count if we haven't seen this (skb, verdict) pair
-                verdict_key = (skb_addr, verdict)
-                if verdict_key not in self.counted_verdicts:
-                    self.verdict_breakdown[verdict] += 1
-                    if verdict == 'DROP':
-                        self.drop_count += 1
-                    self.counted_verdicts.add(verdict_key)
-
-                    # Cleanup old entries to prevent memory bloat
-                    if len(self.counted_verdicts) > 50000:
-                        # Remove oldest 10000 entries
-                        old_entries = list(self.counted_verdicts)[:10000]
-                        for entry in old_entries:
-                            self.counted_verdicts.discard(entry)
+            self.verdict_breakdown[verdict] += 1
+            if verdict == 'DROP':
+                self.drop_count += 1
 
         if error:
             self.error_count += 1
@@ -1676,6 +1660,8 @@ class SessionStatsTracker:
             protocol = event.get('protocol', 0)
             src_ip = event.get('src_ip', '0.0.0.0')
             dst_ip = event.get('dst_ip', '0.0.0.0')
+            trace_type = event.get('trace_type', None)  # NEW: Get trace_type (chain_exit, rule_eval, hook_exit)
+            skb_addr = event.get('skb_addr', '')  # NEW: Get skb_addr for tracking
 
             # Determine layer
             if is_multifunction and 'layer' in event:
@@ -1708,20 +1694,16 @@ class SessionStatsTracker:
             # DEBUG: Log verdict info for first few events
             if self.total_events <= 10 and verdict != 255:
                 print(f"[SessionStats {self.session_id}] Verdict event #{self.total_events}: "
-                      f"func={func_name}, verdict={verdict_name} ({verdict}), hook={hook_name}")
+                      f"func={func_name}, verdict={verdict_name} ({verdict}), hook={hook_name}, trace_type={trace_type}")
 
-            # Track verdict - Accept from ANY netfilter function that has verdict
-            # Netfilter functions include: nf_hook_slow, nft_do_chain, nft_immediate_eval, etc.
-            # We'll deduplicate per packet (skb_addr) to avoid double-counting
-            if verdict != 255 and verdict_name != 'UNKNOWN':
-                # Check if this is a netfilter-related function
-                is_netfilter = any(kw in func_name.lower() for kw in ['nf_', 'nft_', 'netfilter'])
+            # CRITICAL FIX: Only count verdict from "chain_exit" events
+            # chain_exit = final verdict when packet exits an nftables chain
+            # This prevents double-counting from rule_eval and hook_exit events
+            if verdict != 255 and verdict_name != 'UNKNOWN' and trace_type == 'chain_exit':
+                layer_stats['verdict_breakdown'][verdict_name] += 1
 
-                if is_netfilter or not func_name:  # Accept if netfilter function or no function (hook event)
-                    layer_stats['verdict_breakdown'][verdict_name] += 1
-
-                    if self.total_events <= 10:
-                        print(f"[SessionStats {self.session_id}] ✓ Verdict counted: {verdict_name} from {func_name or 'hook'}")
+                if self.total_events <= 10:
+                    print(f"[SessionStats {self.session_id}] ✓ Verdict counted: {verdict_name} (trace_type={trace_type})")
 
             # Track function
             if func_name:
@@ -1788,11 +1770,15 @@ class SessionStatsTracker:
                             del self.skb_tracking[key]
 
                 # Add event to node
+                # CRITICAL: Only pass verdict if trace_type == "chain_exit"
+                # This prevents double-counting verdicts from rule_eval and hook_exit events
+                verdict_to_count = verdict_name if trace_type == 'chain_exit' else None
+
                 node.add_event(
                     skb_addr=skb_addr,
                     latency_us=latency_us,
                     function=func_name,
-                    verdict=verdict_name,
+                    verdict=verdict_to_count,
                     error=(event.get('error_code', 0) > 0)
                 )
 
