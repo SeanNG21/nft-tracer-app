@@ -55,7 +55,8 @@ const ChangePassword = () => {
         new_password: newPassword,
       });
 
-      // Redirect to dashboard
+      // Redirect to dashboard immediately
+      // The dashboard will fetch fresh user data
       navigate('/');
     } catch (err) {
       setError(err.response?.data?.error || 'Password change failed');
