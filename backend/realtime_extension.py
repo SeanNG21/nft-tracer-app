@@ -772,30 +772,27 @@ class RealtimeStats:
                 first_ts = self.skb_tracking[event.skb_addr]['first_ts']
                 latency_us = (event.timestamp - first_ts) * 1_000_000  # convert to microseconds
 
-            # VERDICT FILTERING LOGIC - Only count non-ACCEPT verdicts from nft_immediate_eval
-            # Global realtime: Show only DROP/STOLEN/QUEUE verdicts from nft_immediate_eval function
-            # ACCEPT verdicts are skipped (too many, not interesting for monitoring)
+            # VERDICT FILTERING LOGIC - Only count verdicts from netfilter functions with deduplication
             verdict_to_count = None
             if event.verdict_name and event.verdict_name != 'UNKNOWN':
-                # ONLY count verdicts from nft_immediate_eval (explicit verdict from nftables rules)
-                if event.function == 'nft_immediate_eval' and event.skb_addr:
-                    # Skip ACCEPT verdicts (only show DROP, STOLEN, QUEUE, etc.)
-                    if event.verdict_name != 'ACCEPT':
-                        # Initialize counted_verdicts set for this node if not exists
-                        if not hasattr(node, 'counted_verdicts'):
-                            node.counted_verdicts = set()
+                # Check if this is a netfilter function
+                is_netfilter = any(kw in (event.function or '').lower() for kw in ['nf_', 'nft_', 'netfilter'])
+                if is_netfilter and event.skb_addr:
+                    # Initialize counted_verdicts set for this node if not exists
+                    if not hasattr(node, 'counted_verdicts'):
+                        node.counted_verdicts = set()
 
-                        # Deduplicate by (skb_addr, verdict) - count each verdict once per packet
-                        verdict_key = (event.skb_addr, event.verdict_name)
-                        if verdict_key not in node.counted_verdicts:
-                            verdict_to_count = event.verdict_name
-                            node.counted_verdicts.add(verdict_key)
+                    # Deduplicate by (skb_addr, verdict) - count each verdict once per packet
+                    verdict_key = (event.skb_addr, event.verdict_name)
+                    if verdict_key not in node.counted_verdicts:
+                        verdict_to_count = event.verdict_name
+                        node.counted_verdicts.add(verdict_key)
 
-                            # Cleanup to prevent memory bloat
-                            if len(node.counted_verdicts) > 10000:
-                                old_entries = list(node.counted_verdicts)[:2000]
-                                for entry in old_entries:
-                                    node.counted_verdicts.discard(entry)
+                        # Cleanup to prevent memory bloat
+                        if len(node.counted_verdicts) > 10000:
+                            old_entries = list(node.counted_verdicts)[:2000]
+                            for entry in old_entries:
+                                node.counted_verdicts.discard(entry)
 
             # Add event to node (only pass filtered verdict)
             node.add_event(

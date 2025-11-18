@@ -567,39 +567,27 @@ class SessionRealtimeStats:
                 first_ts = self.skb_tracking[skb_addr]['first_ts']
                 latency_us = (timestamp - first_ts) * 1_000_000  # convert to microseconds
 
-            # VERDICT FILTERING LOGIC - Giống y nguyên RealtimeStats
-            # Support both NFT events and function trace events:
-            # 1. If trace_type exists (NFT events): Count from "chain_exit" and "hook_exit" (nf_hook_slow verdict)
-            # 2. If no trace_type (function trace events): Count from netfilter functions with deduplication
+            # VERDICT FILTERING LOGIC - Only count verdicts from netfilter functions with deduplication
             verdict_to_count = None
             if verdict_name and verdict_name != 'UNKNOWN':
-                if trace_type:
-                    # Case 1: NFT events with trace_type (session events from nft_tracer.bpf.c / full_tracer.bpf.c)
-                    # - chain_exit: verdict from nft_do_chain (when chain returns)
-                    # - hook_exit: verdict from nf_hook_slow return value (final netfilter verdict)
-                    # ONLY count these to avoid double-counting from rule_eval
-                    if trace_type in ['chain_exit', 'hook_exit']:
+                # Check if this is a netfilter function
+                is_netfilter = any(kw in func_name.lower() for kw in ['nf_', 'nft_', 'netfilter'])
+                if is_netfilter and skb_addr:
+                    # Initialize counted_verdicts set for this node if not exists
+                    if not hasattr(node, 'counted_verdicts'):
+                        node.counted_verdicts = set()
+
+                    # Deduplicate by (skb_addr, verdict) - count each verdict once per packet
+                    verdict_key = (skb_addr, verdict_name)
+                    if verdict_key not in node.counted_verdicts:
                         verdict_to_count = verdict_name
-                else:
-                    # Case 2: Function trace events without trace_type (from full_tracer.bpf.c)
-                    # Count from netfilter functions with per-packet deduplication
-                    is_netfilter = any(kw in func_name.lower() for kw in ['nf_', 'nft_', 'netfilter'])
-                    if is_netfilter and skb_addr:
-                        # Initialize counted_verdicts set for this node if not exists
-                        if not hasattr(node, 'counted_verdicts'):
-                            node.counted_verdicts = set()
+                        node.counted_verdicts.add(verdict_key)
 
-                        # Deduplicate by (skb_addr, verdict) - count each verdict once per packet
-                        verdict_key = (skb_addr, verdict_name)
-                        if verdict_key not in node.counted_verdicts:
-                            verdict_to_count = verdict_name
-                            node.counted_verdicts.add(verdict_key)
-
-                            # Cleanup to prevent memory bloat
-                            if len(node.counted_verdicts) > 10000:
-                                old_entries = list(node.counted_verdicts)[:2000]
-                                for entry in old_entries:
-                                    node.counted_verdicts.discard(entry)
+                        # Cleanup to prevent memory bloat
+                        if len(node.counted_verdicts) > 10000:
+                            old_entries = list(node.counted_verdicts)[:2000]
+                            for entry in old_entries:
+                                node.counted_verdicts.discard(entry)
 
             # Add event to node (only pass filtered verdict)
             node.add_event(
