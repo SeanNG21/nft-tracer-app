@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import RealtimeView from './RealtimeView';
-import SessionRealtimeStats from './SessionRealtimeStats';
-import TraceViewer from './TraceViewer';
-import NFTablesManager from './NFTablesManager';
+import RealtimeView from './pages/RealtimeView';
+import SessionRealtimeStats from './pages/SessionRealtimeStats';
+import TraceViewer from './pages/TraceViewer';
+import NFTablesManager from './pages/NFTablesManager';
 import './App.css';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
