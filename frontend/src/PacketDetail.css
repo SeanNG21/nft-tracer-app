@@ -276,6 +276,7 @@
 .badge.verdict-stolen,
 .badge.verdict-queue {
   background: linear-gradient(135deg, #9c27b0, #7b1fa2);
+  color: #ffffff;
 }
 
 /* Function Flow */
@@ -640,7 +641,7 @@
 
 /* Additional verdict colors */
 .verdict.verdict-stolen {
-  color: #9c27b0;
+  color: #ffffff;
   font-weight: 600;
 }
 
