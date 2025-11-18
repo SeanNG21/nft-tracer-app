@@ -65,9 +65,14 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
     ? `linear-gradient(135deg, ${stageDef.color} 0%, ${stageDef.color}dd 100%)`
     : 'linear-gradient(135deg, #e0e0e0 0%, #c0c0c0 100%)';
 
-  // Verdict pie chart data for Netfilter nodes
+  // Verdict data for Netfilter nodes (percentages from summary)
   const verdictData = nodeData?.verdict || null;
   const isNetfilterNode = stageDef.name.includes('Netfilter');
+
+  // Convert top_functions from object {func: pct} to array for display
+  const topFunctionsArray = nodeData?.top_functions
+    ? Object.entries(nodeData.top_functions).map(([name, pct]) => ({ name, pct }))
+    : [];
 
   return (
     <div className="pipeline-node-wrapper">
@@ -93,9 +98,9 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
         )}
 
         {/* Top Functions */}
-        {isActive && nodeData?.top_functions && nodeData.top_functions.length > 0 && (
+        {isActive && topFunctionsArray.length > 0 && (
           <div className="node-functions">
-            {nodeData.top_functions.slice(0, 2).map((func, idx) => (
+            {topFunctionsArray.slice(0, 2).map((func, idx) => (
               <div key={idx} className="func-line">
                 <span className="func-name">{func.name}</span>
                 <span className="func-pct">{func.pct}%</span>
@@ -104,18 +109,17 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
           </div>
         )}
 
-        {/* Latency */}
-        {isActive && nodeData?.latency && nodeData.latency.p50 > 0 && (
+        {/* Latency (from latency_ns.p50 in nanoseconds) */}
+        {isActive && nodeData?.latency_ns && nodeData.latency_ns.p50 > 0 && (
           <div className="node-latency">
-            ⏱️ p50: {nodeData.latency.p50.toFixed(1)}µs
+            ⏱️ p50: {(nodeData.latency_ns.p50 / 1000).toFixed(1)}µs
           </div>
         )}
 
-        {/* Verdict for Netfilter nodes */}
+        {/* Verdict for Netfilter nodes (already percentages) */}
         {isActive && isNetfilterNode && verdictData && (
           <div className="node-verdict">
-            {Object.entries(verdictData).map(([verdict, vCount]) => {
-              const pct = count > 0 ? ((vCount / count) * 100).toFixed(0) : 0;
+            {Object.entries(verdictData).map(([verdict, pct]) => {
               return pct > 0 ? (
                 <div key={verdict} className={`verdict-badge verdict-${verdict.toLowerCase()}`}>
                   {verdict}: {pct}%
@@ -130,21 +134,16 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
           <div className="node-tooltip">
             <div className="tooltip-header">{stageDef.name}</div>
             <div className="tooltip-stat">Events: {count.toLocaleString()}</div>
-            {nodeData?.unique_packets && (
-              <div className="tooltip-stat">Unique: {nodeData.unique_packets}</div>
-            )}
-            {nodeData?.latency && nodeData.latency.p50 > 0 && (
+            {nodeData?.latency_ns && nodeData.latency_ns.p50 > 0 && (
               <div className="tooltip-section">
-                <div className="tooltip-label">Latency (µs):</div>
-                <div className="tooltip-stat">p50: {nodeData.latency.p50.toFixed(1)}</div>
-                <div className="tooltip-stat">p90: {nodeData.latency.p90.toFixed(1)}</div>
-                <div className="tooltip-stat">p99: {nodeData.latency.p99.toFixed(1)}</div>
+                <div className="tooltip-label">Latency:</div>
+                <div className="tooltip-stat">p50: {(nodeData.latency_ns.p50 / 1000).toFixed(1)}µs</div>
               </div>
             )}
-            {nodeData?.top_functions && nodeData.top_functions.length > 0 && (
+            {topFunctionsArray.length > 0 && (
               <div className="tooltip-section">
                 <div className="tooltip-label">Top Functions:</div>
-                {nodeData.top_functions.map((func, idx) => (
+                {topFunctionsArray.map((func, idx) => (
                   <div key={idx} className="tooltip-stat">
                     {idx + 1}. {func.name} – {func.pct}%
                   </div>
@@ -154,15 +153,12 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
             {verdictData && (
               <div className="tooltip-section">
                 <div className="tooltip-label">Verdicts:</div>
-                {Object.entries(verdictData).map(([verdict, vCount]) => (
+                {Object.entries(verdictData).map(([verdict, pct]) => (
                   <div key={verdict} className="tooltip-stat">
-                    {verdict}: {vCount} ({((vCount / count) * 100).toFixed(1)}%)
+                    {verdict}: {pct}%
                   </div>
                 ))}
               </div>
-            )}
-            {nodeData?.drops > 0 && (
-              <div className="tooltip-stat error">Drops: {nodeData.drops}</div>
             )}
           </div>
         )}
@@ -315,7 +311,7 @@ function SessionRealtimeStats({ sessionId }) {
       </div>
 
       {/* ENHANCED FULL MODE: Pipeline Flow Visualization with Detailed Metrics */}
-      {stats.mode === 'full' && stats.nodes && Object.keys(stats.nodes).length > 0 && (
+      {stats.mode === 'full' && stats.summary && Object.keys(stats.summary).length > 0 && (
         <div className="realtime-panel full-width">
           <h3>🔄 Enhanced Packet Pipeline Flow</h3>
 
@@ -325,7 +321,7 @@ function SessionRealtimeStats({ sessionId }) {
               const inboundNodes = PIPELINE_DEFINITIONS.Inbound.mainFlow.concat(
                 ...Object.values(PIPELINE_DEFINITIONS.Inbound.branches)
               );
-              const inboundCounts = inboundNodes.map(s => stats.nodes[s.name]?.count || 0);
+              const inboundCounts = inboundNodes.map(s => stats.summary[s.name]?.count || 0);
               const hasInbound = inboundCounts.some(c => c > 0);
 
               if (!hasInbound) return null;
@@ -346,7 +342,7 @@ function SessionRealtimeStats({ sessionId }) {
                   <div className="pipeline-main-flow">
                     <div className="pipeline-stages">
                       {PIPELINE_DEFINITIONS.Inbound.mainFlow.map((stageDef, index, arr) => {
-                        const nodeData = stats.nodes[stageDef.name];
+                        const nodeData = stats.summary[stageDef.name];
                         const isActive = nodeData && nodeData.count > 0;
 
                         return (
@@ -378,7 +374,7 @@ function SessionRealtimeStats({ sessionId }) {
                       </div>
                       <div className="pipeline-stages">
                         {PIPELINE_DEFINITIONS.Inbound.branches['Local Delivery'].map((stageDef, index, arr) => {
-                          const nodeData = stats.nodes[stageDef.name];
+                          const nodeData = stats.summary[stageDef.name];
                           const isActive = nodeData && nodeData.count > 0;
 
                           return (
@@ -408,7 +404,7 @@ function SessionRealtimeStats({ sessionId }) {
                       </div>
                       <div className="pipeline-stages">
                         {PIPELINE_DEFINITIONS.Inbound.branches['Forward'].map((stageDef, index, arr) => {
-                          const nodeData = stats.nodes[stageDef.name];
+                          const nodeData = stats.summary[stageDef.name];
                           const isActive = nodeData && nodeData.count > 0;
 
                           return (
@@ -436,7 +432,7 @@ function SessionRealtimeStats({ sessionId }) {
 
             {/* Outbound Pipeline */}
             {(() => {
-              const outboundCounts = PIPELINE_DEFINITIONS.Outbound.map(s => stats.nodes[s.name]?.count || 0);
+              const outboundCounts = PIPELINE_DEFINITIONS.Outbound.map(s => stats.summary[s.name]?.count || 0);
               const hasOutbound = outboundCounts.some(c => c > 0);
 
               if (!hasOutbound) return null;
@@ -455,7 +451,7 @@ function SessionRealtimeStats({ sessionId }) {
 
                   <div className="pipeline-stages">
                     {PIPELINE_DEFINITIONS.Outbound.map((stageDef, index, arr) => {
-                      const nodeData = stats.nodes[stageDef.name];
+                      const nodeData = stats.summary[stageDef.name];
                       const isActive = nodeData && nodeData.count > 0;
 
                       return (

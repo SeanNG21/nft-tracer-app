@@ -1835,6 +1835,14 @@ class SessionStatsTracker:
                 stats['nodes'] = nodes_data
                 stats['summary'] = summary_data
 
+                # DEBUG: Log summary data generation
+                print(f"[SessionStats {self.session_id}] Generated summary for {len(summary_data)} nodes: {list(summary_data.keys())}")
+                # Show sample summary data for Netfilter nodes
+                for node_name in summary_data.keys():
+                    if 'Netfilter' in node_name:
+                        summary = summary_data[node_name]
+                        print(f"  {node_name}: count={summary.get('count', 0)}, verdict={summary.get('verdict', {})}")
+
             return stats
 
 class RealtimeExtension:
