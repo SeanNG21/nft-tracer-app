@@ -318,7 +318,7 @@ int kretprobe__nft_do_chain(struct pt_regs *ctx)
 }
 
 // Storage for tracking nft_immediate_eval verdicts
-BPF_HASH(nft_eval_map, u64, u32, 10240);
+BPF_HASH(nft_eval_map, u64, u64, 10240);
 
 int kprobe__nft_immediate_eval(struct pt_regs *ctx)
 {
