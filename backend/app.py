@@ -51,18 +51,25 @@ CORS(app, resources={r"/api/*": {
 try:
     from flask_socketio import SocketIO
     from realtime_extension import RealtimeExtension, add_realtime_routes
+    from session_full_trace_stats import SessionFullTraceStatsManager, add_session_full_trace_routes
 
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading',
                        logger=False, engineio_logger=False)
     realtime = RealtimeExtension(app, socketio)
     add_realtime_routes(app, realtime)
 
+    # Add session full trace stats manager
+    session_full_trace_stats = SessionFullTraceStatsManager(socketio)
+    add_session_full_trace_routes(app, session_full_trace_stats)
+
     REALTIME_AVAILABLE = True
     print("[✓] Realtime visualization module loaded")
+    print("[✓] Session Full Trace Stats module loaded")
 except ImportError as e:
     REALTIME_AVAILABLE = False
     socketio = None
     realtime = None
+    session_full_trace_stats = None
     print(f"[!] Realtime not available: {e}")
     print("[!] Install: pip3 install flask-socketio python-socketio")
 
@@ -1076,6 +1083,31 @@ class TraceSession:
                     except Exception as e:
                         pass
 
+                # Process event for session full trace stats
+                if REALTIME_AVAILABLE and session_full_trace_stats:
+                    try:
+                        session_full_trace_stats.process_event(self.session_id, {
+                            'timestamp': time.time(),
+                            'skb_addr': hex(event.skb_addr) if event.skb_addr else '',
+                            'cpu_id': event.cpu_id,
+                            'pid': event.pid,
+                            'event_type': 0,
+                            'hook': event.hook,
+                            'pf': 2,
+                            'protocol': event.protocol,
+                            'src_ip': trace._format_ip(event.src_ip),
+                            'dst_ip': trace._format_ip(event.dst_ip),
+                            'src_port': event.src_port,
+                            'dst_port': event.dst_port,
+                            'length': event.length,
+                            'verdict': event.verdict,
+                            'error_code': 0,
+                            'func_name': func_name,
+                            'comm': event.comm.decode('utf-8', errors='ignore')
+                        })
+                    except Exception as e:
+                        pass
+
             elif event.event_type in [1, 2, 3]:
                 nft_event = NFTEvent(
                     timestamp=event.timestamp, cpu_id=event.cpu_id, pid=event.pid,
@@ -1111,6 +1143,31 @@ class TraceSession:
                             'trace_type': trace_type_str,  # ADD: trace_type for verdict filtering
                             'skb_addr': hex(event.skb_addr) if event.skb_addr else None  # ADD: for deduplication
                         }, self.session_id)
+                    except Exception as e:
+                        pass
+
+                # Process NFT event for session full trace stats
+                if REALTIME_AVAILABLE and session_full_trace_stats:
+                    try:
+                        session_full_trace_stats.process_event(self.session_id, {
+                            'timestamp': time.time(),
+                            'skb_addr': hex(event.skb_addr) if event.skb_addr else '',
+                            'cpu_id': event.cpu_id,
+                            'pid': event.pid,
+                            'event_type': event.event_type,
+                            'hook': event.hook,
+                            'pf': event.pf,
+                            'protocol': event.protocol,
+                            'src_ip': trace._format_ip(event.src_ip),
+                            'dst_ip': trace._format_ip(event.dst_ip),
+                            'src_port': event.src_port,
+                            'dst_port': event.dst_port,
+                            'length': 0,
+                            'verdict': event.verdict,
+                            'error_code': 0,
+                            'func_name': 'nft_do_chain',
+                            'comm': event.comm.decode('utf-8', errors='ignore')
+                        })
                     except Exception as e:
                         pass
 
@@ -1247,10 +1304,12 @@ class TraceSession:
             return stats
 
 class SessionManager:
-    def __init__(self, realtime_ext=None):
+    def __init__(self, realtime_ext=None, session_full_trace_ext=None):
         self.sessions: Dict[str, TraceSession] = {}
         self.lock = threading.Lock()
         self.realtime = realtime_ext
+        self.session_full_trace = session_full_trace_ext
+
     def create_session(self, session_id: str, mode: str = "nft",
                       pcap_filter: str = "", max_functions: int = 30) -> bool:
         with self.lock:
@@ -1266,6 +1325,13 @@ class SessionManager:
                         self.realtime.start_session_tracking(session_id, mode)
                     except Exception as e:
                         print(f"[Warning] Failed to start realtime tracking: {e}")
+
+                # Start session full trace stats tracking
+                if self.session_full_trace:
+                    try:
+                        self.session_full_trace.start_tracking(session_id, mode)
+                    except Exception as e:
+                        print(f"[Warning] Failed to start session full trace tracking: {e}")
 
                 return True
             return False
@@ -1284,6 +1350,13 @@ class SessionManager:
                 except Exception as e:
                     print(f"[Warning] Failed to stop realtime tracking: {e}")
 
+            # Stop session full trace stats tracking
+            if self.session_full_trace:
+                try:
+                    self.session_full_trace.stop_tracking(session_id)
+                except Exception as e:
+                    print(f"[Warning] Failed to stop session full trace tracking: {e}")
+
             return output_path
 
     def get_session_stats(self, session_id: str) -> Optional[Dict]:
@@ -1296,7 +1369,10 @@ class SessionManager:
         with self.lock:
             return [session.get_stats() for session in self.sessions.values()]
 
-session_manager = SessionManager(realtime_ext=realtime if REALTIME_AVAILABLE else None)
+session_manager = SessionManager(
+    realtime_ext=realtime if REALTIME_AVAILABLE else None,
+    session_full_trace_ext=session_full_trace_stats if REALTIME_AVAILABLE else None
+)
 
 # Create database tables
 with app.app_context():

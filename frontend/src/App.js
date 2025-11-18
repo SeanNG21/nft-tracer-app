@@ -4,6 +4,7 @@ import axios from 'axios';
 
 import RealtimeView from './pages/RealtimeView';
 import SessionRealtimeStats from './pages/SessionRealtimeStats';
+import SessionFullTraceStats from './pages/SessionFullTraceStats';
 import TraceViewer from './pages/TraceViewer';
 import NFTablesManager from './pages/NFTablesManager';
 
@@ -525,15 +526,15 @@ function Dashboard() {
                 {sessionDetailsTab === 'realtime' && (
                   <div>
                     {sessionStats.realtime_stats || health?.realtime_available ? (
-                      <SessionRealtimeStats sessionId={sessionStats.session_id} />
+                      <SessionFullTraceStats sessionId={sessionStats.session_id} />
                     ) : (
                       <div style={{ textAlign: 'center', padding: '3rem', background: '#f8f9fa', borderRadius: '12px' }}>
-                        <h3 style={{ color: '#dc3545', marginBottom: '1rem' }}>⚠️ Realtime Stats Không Khả Dụng</h3>
+                        <h3 style={{ color: '#dc3545', marginBottom: '1rem' }}>⚠️ Session Full Trace Stats Không Khả Dụng</h3>
                         <p style={{ color: '#666', marginBottom: '0.5rem' }}>
                           Session này không có realtime stats.
                         </p>
                         <p style={{ color: '#666', fontSize: '0.9rem' }}>
-                          Đảm bảo backend đang chạy <code>app_with_realtime.py</code> và SocketIO được bật.
+                          Đảm bảo backend đang chạy và SocketIO được bật.
                         </p>
                       </div>
                     )}
