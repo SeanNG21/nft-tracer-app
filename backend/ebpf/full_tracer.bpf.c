@@ -317,6 +317,9 @@ int kretprobe__nft_do_chain(struct pt_regs *ctx)
     return 0;
 }
 
+// Storage for tracking nft_immediate_eval verdicts
+BPF_HASH(nft_eval_map, u64, u32, 10240);
+
 int kprobe__nft_immediate_eval(struct pt_regs *ctx)
 {
     u64 tid = bpf_get_current_pid_tgid();
@@ -331,10 +334,36 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
 
     stored->rule_seq++;
 
-    s32 verdict_code = 0;
-    bpf_probe_read_kernel(&verdict_code, sizeof(verdict_code), (char *)expr + 8);
+    // Store expr address for kretprobe to access
+    u64 expr_addr = (u64)expr;
+    nft_eval_map.update(&tid, &expr_addr);
 
-    u64 rule_handle = extract_rule_handle(expr);
+    return 0;
+}
+
+int kretprobe__nft_immediate_eval(struct pt_regs *ctx)
+{
+    u64 tid = bpf_get_current_pid_tgid();
+
+    u64 rax_u64 = PT_REGS_RC(ctx);
+    s32 rax_s32 = (s32)rax_u64;
+    u32 rax_u32 = (u32)rax_u64;
+
+    struct trace_event *stored = skb_info_map.lookup(&tid);
+    if (!stored)
+        return 0;
+
+    u32 verdict = decode_verdict(rax_s32, rax_u32);
+
+    // Get stored expr address
+    u64 *expr_addr_ptr = nft_eval_map.lookup(&tid);
+    u64 expr_addr = expr_addr_ptr ? *expr_addr_ptr : 0;
+
+    // Extract rule handle if available
+    u64 rule_handle = 0;
+    if (expr_addr) {
+        rule_handle = extract_rule_handle((void *)expr_addr);
+    }
 
     struct trace_event evt = {};
     evt.timestamp = bpf_ktime_get_ns();
@@ -344,7 +373,7 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
 
     evt.skb_addr = stored->skb_addr;
     evt.chain_addr = stored->chain_addr;
-    evt.expr_addr = (u64)expr;
+    evt.expr_addr = expr_addr;
     evt.hook = stored->hook;
     evt.pf = stored->pf;
     evt.chain_depth = stored->chain_depth;
@@ -358,20 +387,21 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
     evt.dst_port = stored->dst_port;
     evt.length = stored->length;
 
-    evt.verdict_raw = verdict_code;
-    evt.verdict = decode_verdict(verdict_code, (u32)verdict_code);
+    // CRITICAL FIX: Use actual return value verdict instead of pre-read verdict
+    // This captures the actual executed verdict, not the rule definition
+    evt.verdict_raw = rax_s32;
+    evt.verdict = verdict;
 
-    if (evt.verdict == 3u) {
-        evt.queue_num = ((u32)verdict_code >> 16) & 0xFFFFu;
-        evt.has_queue_bypass = (((u32)verdict_code & 0x8000u) ? 1 : 0);
+    if (verdict == 3u) {
+        evt.queue_num = (rax_u32 >> 16) & 0xFFFFu;
+        evt.has_queue_bypass = ((rax_u32 & 0x8000u) ? 1 : 0);
     }
-
-    // CRITICAL FIX: Set func_ip so Python backend can identify this as nft_immediate_eval
-    // This ensures verdict is counted correctly for the Netfilter hook
-    evt.func_ip = PT_REGS_IP(ctx);
 
     read_comm_safe(evt.comm, sizeof(evt.comm));
     events.perf_submit(ctx, &evt, sizeof(evt));
+
+    // Cleanup
+    nft_eval_map.delete(&tid);
 
     return 0;
 }
