@@ -23,6 +23,9 @@ from flask_cors import CORS
 from bcc import BPF
 import ctypes as ct
 
+# Import session realtime backend (copy y nguyên từ RealtimeStats)
+from session_realtime_backend import SessionRealtimeStats
+
 # ============================================
 # MAPPINGS AND CONSTANTS
 # ============================================
@@ -1571,7 +1574,15 @@ class SessionStatsTracker:
         self.mode = mode
         self.start_time = time.time()
 
-        # Overall stats
+        # FULL MODE: Use SessionRealtimeStats backend (copy y nguyên từ RealtimeStats)
+        if self.mode == 'full':
+            self.full_mode_backend = SessionRealtimeStats()
+            # Create dummy lock for compatibility
+            self.lock = threading.Lock()
+            # No need to initialize other fields for full mode
+            return
+
+        # Overall stats (for non-full modes)
         self.total_packets = 0
         self.total_events = 0
 
@@ -1664,6 +1675,11 @@ class SessionStatsTracker:
 
     def process_event(self, event: Dict):
         """Process a single event"""
+        # FULL MODE: Delegate to SessionRealtimeStats backend
+        if self.mode == 'full':
+            self.full_mode_backend.process_event(event)
+            return
+
         with self.lock:
             self.total_events += 1
 
@@ -1988,6 +2004,14 @@ class SessionStatsTracker:
     
     def get_stats(self) -> Dict:
         """Get current statistics"""
+        # FULL MODE: Delegate to SessionRealtimeStats backend
+        if self.mode == 'full':
+            stats = self.full_mode_backend.get_summary()
+            # Add session_id and total_events for compatibility
+            stats['session_id'] = self.session_id
+            stats['total_events'] = stats['total_packets']  # For compatibility with frontend
+            return stats
+
         with self.lock:
             uptime = time.time() - self.start_time
             pps = self.total_events / uptime if uptime > 0 else 0
