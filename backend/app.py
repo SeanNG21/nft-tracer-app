@@ -1234,21 +1234,29 @@ class SessionManager:
         self.realtime = realtime_ext
     def create_session(self, session_id: str, mode: str = "nft",
                       pcap_filter: str = "", max_functions: int = 30) -> bool:
+        print(f"[DEBUG] SessionManager.create_session called: id={session_id}, mode={mode}")
         with self.lock:
             if session_id in self.sessions:
+                print(f"[ERROR] Session {session_id} already exists!")
                 return False
 
+            print(f"[DEBUG] Creating TraceSession object...")
             session = TraceSession(session_id, mode, pcap_filter, max_functions)
+            print(f"[DEBUG] Calling session.start()...")
             if session.start():
                 self.sessions[session_id] = session
+                print(f"[✓] Session {session_id} started successfully")
 
                 if self.realtime:
                     try:
+                        print(f"[DEBUG] Starting realtime tracking for session {session_id}")
                         self.realtime.start_session_tracking(session_id, mode)
                     except Exception as e:
                         print(f"[Warning] Failed to start realtime tracking: {e}")
 
                 return True
+
+            print(f"[ERROR] session.start() returned False - BPF initialization failed")
             return False
 
     def stop_session(self, session_id: str) -> Optional[str]:
