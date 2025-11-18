@@ -1301,9 +1301,9 @@ class RealtimeTracer:
                 break
     
     def _stats_broadcast_loop(self):
-        """Broadcast statistics every 0.1 seconds for better real-time in-flight visibility"""
+        """Broadcast statistics every 0.3 seconds for smoother visualization"""
         while self.running:
-            time.sleep(0.1)  # 100ms for better real-time updates
+            time.sleep(0.3)  # 300ms for better readability
             try:
                 summary = self.stats.get_summary()
                 self.socketio.emit('stats_update', summary)
@@ -2021,22 +2021,22 @@ class RealtimeExtension:
                     self._session_not_found_logged.add(session_id)
     
     def _emit_session_stats_loop(self):
-        """Background thread to emit session stats every 0.1 seconds for better real-time visibility"""
-        print(f"[DEBUG] _emit_session_stats_loop started (0.1s interval)")
+        """Background thread to emit session stats every 0.3 seconds for smoother visualization"""
+        print(f"[DEBUG] _emit_session_stats_loop started (0.3s interval)")
         iteration = 0
         while self._session_stats_running:
-            time.sleep(0.1)  # 100ms for better real-time updates
+            time.sleep(0.3)  # 300ms for better readability
             iteration += 1
 
             with self.session_lock:
-                if iteration <= 30:  # Debug first 30 iterations (3 seconds worth at 100ms)
+                if iteration <= 10:  # Debug first 10 iterations (3 seconds worth at 300ms)
                     print(f"[DEBUG] Emit iteration #{iteration}, active sessions: {list(self.session_trackers.keys())}")
 
                 for session_id, tracker in list(self.session_trackers.items()):
                     try:
                         stats = tracker.get_stats()
 
-                        if iteration <= 30:  # Debug first 30 iterations (3s at 100ms)
+                        if iteration <= 10:  # Debug first 10 iterations (3s at 300ms)
                             print(f"[DEBUG] Emitting stats for {session_id}: total_events={stats['total_events']}, total_packets={stats['total_packets']}")
 
                         # Emit to session-specific room
