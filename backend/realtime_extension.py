@@ -309,6 +309,9 @@ class NodeStats:
     last_ts: Optional[float] = None
     in_flight_packets: set = field(default_factory=set)  # packets currently on this node
 
+    # For verdict deduplication (track unique verdicts per packet)
+    counted_verdicts: set = field(default_factory=set)  # (skb_addr, verdict) pairs
+
     # For packet rate calculation
     previous_count: int = 0
     previous_ts: Optional[float] = None
@@ -324,14 +327,30 @@ class NodeStats:
             self.latencies_us.append(latency_us)
         if function:
             self.function_calls[function] += 1
-        # CRITICAL: Only count verdict from nft_immediate_eval
-        # This is the actual function that executes verdict actions per-rule
-        # Other functions (nft_do_chain, nf_hook_slow) just return overall verdict
-        # No deduplication needed - each rule only executes once per packet
-        if verdict and function == 'nft_immediate_eval':
-            self.verdict_breakdown[verdict] += 1
-            if verdict == 'DROP':
-                self.drop_count += 1
+
+        # UPDATED: Count verdict from ANY netfilter function with deduplication
+        # Accept verdict from: nft_immediate_eval (preferred), nf_hook_slow, nft_do_chain, or any nf_/nft_ function
+        # Use deduplication to avoid counting same verdict multiple times for same packet
+        if verdict and verdict != 'UNKNOWN':
+            # Check if this is a netfilter-related function or no function (direct hook event)
+            is_netfilter = not function or any(kw in function.lower() for kw in ['nf_', 'nft_', 'netfilter'])
+
+            if is_netfilter:
+                # Deduplicate: only count if we haven't seen this (skb, verdict) pair
+                verdict_key = (skb_addr, verdict)
+                if verdict_key not in self.counted_verdicts:
+                    self.verdict_breakdown[verdict] += 1
+                    if verdict == 'DROP':
+                        self.drop_count += 1
+                    self.counted_verdicts.add(verdict_key)
+
+                    # Cleanup old entries to prevent memory bloat
+                    if len(self.counted_verdicts) > 50000:
+                        # Remove oldest 10000 entries
+                        old_entries = list(self.counted_verdicts)[:10000]
+                        for entry in old_entries:
+                            self.counted_verdicts.discard(entry)
+
         if error:
             self.error_count += 1
 
@@ -1686,9 +1705,23 @@ class SessionStatsTracker:
             layer_stats = hook_stats['layers'][layer_name]
             layer_stats['packets_in'] += 1
 
-            # Track verdict - ONLY from nft_immediate_eval (same logic as NodeStats)
-            if verdict_name and func_name == 'nft_immediate_eval':
-                layer_stats['verdict_breakdown'][verdict_name] += 1
+            # DEBUG: Log verdict info for first few events
+            if self.total_events <= 10 and verdict != 255:
+                print(f"[SessionStats {self.session_id}] Verdict event #{self.total_events}: "
+                      f"func={func_name}, verdict={verdict_name} ({verdict}), hook={hook_name}")
+
+            # Track verdict - Accept from ANY netfilter function that has verdict
+            # Netfilter functions include: nf_hook_slow, nft_do_chain, nft_immediate_eval, etc.
+            # We'll deduplicate per packet (skb_addr) to avoid double-counting
+            if verdict != 255 and verdict_name != 'UNKNOWN':
+                # Check if this is a netfilter-related function
+                is_netfilter = any(kw in func_name.lower() for kw in ['nf_', 'nft_', 'netfilter'])
+
+                if is_netfilter or not func_name:  # Accept if netfilter function or no function (hook event)
+                    layer_stats['verdict_breakdown'][verdict_name] += 1
+
+                    if self.total_events <= 10:
+                        print(f"[SessionStats {self.session_id}] ✓ Verdict counted: {verdict_name} from {func_name or 'hook'}")
 
             # Track function
             if func_name:
