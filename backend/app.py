@@ -14,10 +14,13 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
+from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity
 import psutil
 
 from discovery.btf_skb_discoverer import BTFSKBDiscoverer
 from integrations.nftables_manager import NFTablesManager
+from models import db, User
+from auth import init_default_user, authenticate_user, create_tokens, token_required, change_password
 
 try:
     from bcc import BPF
@@ -27,7 +30,23 @@ except ImportError:
     print("WARNING: BCC not available - Install: pip3 install bcc")
 
 app = Flask(__name__)
-CORS(app)
+
+# Database configuration
+DB_PATH = os.path.join(os.path.dirname(__file__), "nft_tracer.db")
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{DB_PATH}'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
+
+# Initialize extensions
+db.init_app(app)
+jwt = JWTManager(app)
+
+# CORS configuration - allow authentication headers
+CORS(app, resources={r"/api/*": {
+    "origins": "*",
+    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "allow_headers": ["Content-Type", "Authorization"]
+}})
 
 try:
     from flask_socketio import SocketIO
@@ -1279,6 +1298,108 @@ class SessionManager:
 
 session_manager = SessionManager(realtime_ext=realtime if REALTIME_AVAILABLE else None)
 
+# Create database tables
+with app.app_context():
+    db.create_all()
+    init_default_user()
+    print("[✓] Database initialized")
+
+# ==================== AUTHENTICATION ROUTES ====================
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """Login user and return JWT tokens"""
+    try:
+        data = request.json or {}
+        username = data.get('username', '').strip()
+        password = data.get('password', '')
+
+        user, error = authenticate_user(username, password)
+        if error:
+            return jsonify({'error': error}), 401
+
+        tokens = create_tokens(user.id)
+        return jsonify({
+            'status': 'success',
+            'message': 'Login successful',
+            'user': user.to_dict(),
+            'first_login': user.first_login,
+            **tokens
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/auth/me', methods=['GET'])
+@token_required
+def get_current_user(user=None):
+    """Get current user info"""
+    return jsonify({
+        'status': 'success',
+        'user': user.to_dict() if user else None
+    }), 200
+
+
+@app.route('/api/auth/refresh', methods=['POST'])
+@jwt_required(refresh=True)
+def refresh_token():
+    """Refresh access token using refresh token"""
+    try:
+        current_user_id = get_jwt_identity()
+        user = User.query.get(current_user_id)
+
+        if not user or not user.is_active:
+            return jsonify({'error': 'User not found or inactive'}), 401
+
+        tokens = create_tokens(user.id)
+        return jsonify({
+            'status': 'success',
+            'message': 'Token refreshed',
+            **tokens
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+@token_required
+def logout(user=None):
+    """Logout user (client-side token deletion)"""
+    return jsonify({
+        'status': 'success',
+        'message': 'Logout successful. Please delete the token on client-side.'
+    }), 200
+
+
+@app.route('/api/auth/change-password', methods=['POST'])
+@token_required
+def change_pwd(user=None):
+    """Change user password (required after first login)"""
+    try:
+        data = request.json or {}
+        old_password = data.get('old_password', '')
+        new_password = data.get('new_password', '')
+
+        if not old_password or not new_password:
+            return jsonify({'error': 'Old password and new password are required'}), 400
+
+        success, error = change_password(user.id, old_password, new_password)
+        if not success:
+            return jsonify({'error': error}), 400
+
+        # Refresh user data
+        user = User.query.get(user.id)
+        return jsonify({
+            'status': 'success',
+            'message': 'Password changed successfully',
+            'user': user.to_dict()
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== PROTECTED API ROUTES ====================
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({
@@ -1401,11 +1522,13 @@ def get_fixed_functions():
     })
 
 @app.route('/api/sessions', methods=['GET'])
-def list_sessions():
+@token_required
+def list_sessions(user=None):
     return jsonify({'sessions': session_manager.list_sessions()})
 
 @app.route('/api/sessions', methods=['POST'])
-def create_session():
+@token_required
+def create_session(user=None):
     data = request.json
     session_id = data.get('session_id', f"trace_{int(time.time() * 1000)}")
     mode = data.get('mode', 'nft')
@@ -1422,28 +1545,32 @@ def create_session():
     return jsonify({'error': 'Failed to start'}), 400
 
 @app.route('/api/sessions/<session_id>', methods=['DELETE'])
-def stop_session(session_id):
+@token_required
+def stop_session(session_id, user=None):
     output_path = session_manager.stop_session(session_id)
     if output_path:
         return jsonify({'status': 'stopped', 'output_file': os.path.basename(output_path)})
     return jsonify({'error': 'Session not found'}), 404
 
 @app.route('/api/sessions/<session_id>/stats', methods=['GET'])
-def get_session_stats(session_id):
+@token_required
+def get_session_stats(session_id, user=None):
     stats = session_manager.get_session_stats(session_id)
     if stats:
         return jsonify(stats)
     return jsonify({'error': 'Session not found'}), 404
 
 @app.route('/api/download/<filename>', methods=['GET'])
-def download_file(filename):
+@token_required
+def download_file(filename, user=None):
     file_path = os.path.join(OUTPUT_DIR, filename)
     if os.path.exists(file_path):
         return send_file(file_path, as_attachment=True)
     return jsonify({'error': 'File not found'}), 404
 
 @app.route('/api/files', methods=['GET'])
-def list_files():
+@token_required
+def list_files(user=None):
     files = []
     for filename in os.listdir(OUTPUT_DIR):
         if filename.endswith('.json'):
@@ -1693,7 +1820,8 @@ class TraceAnalyzer:
         return analysis
 
 @app.route('/api/traces/<filename>', methods=['GET'])
-def get_trace_file(filename):
+@token_required
+def get_trace_file(filename, user=None):
     trace_data = TraceAnalyzer.load_trace_file(filename)
     if trace_data is None:
         return jsonify({'error': 'Trace file not found'}), 404
@@ -1701,7 +1829,8 @@ def get_trace_file(filename):
     return jsonify(trace_data)
 
 @app.route('/api/traces/<filename>/packets', methods=['GET'])
-def get_trace_packets(filename):
+@token_required
+def get_trace_packets(filename, user=None):
     trace_data = TraceAnalyzer.load_trace_file(filename)
     if trace_data is None:
         return jsonify({'error': 'Trace file not found'}), 404
@@ -1746,7 +1875,8 @@ def get_trace_packets(filename):
     })
 
 @app.route('/api/traces/<filename>/packets/<int:packet_index>', methods=['GET'])
-def get_packet_detail(filename, packet_index):
+@token_required
+def get_packet_detail(filename, packet_index, user=None):
     trace_data = TraceAnalyzer.load_trace_file(filename)
     if trace_data is None:
         return jsonify({'error': 'Trace file not found'}), 404
@@ -1759,7 +1889,8 @@ def get_packet_detail(filename, packet_index):
 
 
 @app.route('/api/nft/health', methods=['GET'])
-def nft_health():
+@token_required
+def nft_health(user=None):
     available, message = NFTablesManager.check_nft_available()
     return jsonify({
         'available': available,
@@ -1767,7 +1898,8 @@ def nft_health():
     })
 
 @app.route('/api/nft/rules', methods=['GET'])
-def get_nft_rules():
+@token_required
+def get_nft_rules(user=None):
     success, ruleset, error = NFTablesManager.get_ruleset()
 
     if not success:
@@ -1782,7 +1914,8 @@ def get_nft_rules():
     })
 
 @app.route('/api/nft/tables', methods=['GET'])
-def get_nft_tables():
+@token_required
+def get_nft_tables(user=None):
     success, tables, error = NFTablesManager.get_tables()
 
     if not success:
@@ -1794,7 +1927,8 @@ def get_nft_tables():
     })
 
 @app.route('/api/nft/chains/<family>/<table>', methods=['GET'])
-def get_nft_chains(family, table):
+@token_required
+def get_nft_chains(family, table, user=None):
     success, chains, error = NFTablesManager.get_chains(family, table)
 
     if not success:
@@ -1806,7 +1940,8 @@ def get_nft_chains(family, table):
     })
 
 @app.route('/api/nft/rule/add', methods=['POST'])
-def add_nft_rule():
+@token_required
+def add_nft_rule(user=None):
     data = request.get_json()
 
     family = data.get('family')
@@ -1834,7 +1969,8 @@ def add_nft_rule():
     })
 
 @app.route('/api/nft/rule/delete', methods=['POST'])
-def delete_nft_rule():
+@token_required
+def delete_nft_rule(user=None):
     data = request.get_json()
 
     family = data.get('family')
@@ -1862,7 +1998,8 @@ def delete_nft_rule():
     })
 
 @app.route('/api/nft/rule/update', methods=['POST'])
-def update_nft_rule():
+@token_required
+def update_nft_rule(user=None):
     data = request.get_json()
 
     family = data.get('family')

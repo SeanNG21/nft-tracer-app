@@ -1,14 +1,21 @@
 import React, { useState, useEffect } from 'react';
+import { Routes, Route, useNavigate } from 'react-router-dom';
 import axios from 'axios';
+
 import RealtimeView from './pages/RealtimeView';
 import SessionRealtimeStats from './pages/SessionRealtimeStats';
 import TraceViewer from './pages/TraceViewer';
 import NFTablesManager from './pages/NFTablesManager';
+
+import Login from './Login';
+import ChangePassword from './ChangePassword';
+import ProtectedRoute from './ProtectedRoute';
+import { useAuth } from './AuthContext';
 import './App.css';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
 
-function App() {
+function Dashboard() {
   const [sessions, setSessions] = useState([]);
   const [files, setFiles] = useState([]);
   const [modes, setModes] = useState([]);
@@ -677,5 +684,72 @@ function App() {
     </div>
   );
 }
+
+function App() {
+  const { user, logout } = useAuth();
+
+  return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="/change-password" element={<ChangePassword />} />
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <DashboardWithLogout />
+          </ProtectedRoute>
+        }
+      />
+    </Routes>
+  );
+}
+
+function DashboardWithLogout() {
+  const { user, logout, refetchUser } = useAuth();
+  const navigate = useNavigate();
+
+  // Refetch user data when component mounts to ensure fresh state
+  useEffect(() => {
+    refetchUser();
+  }, [refetchUser]);
+
+  // Redirect to change password if first login
+  useEffect(() => {
+    if (user && user.first_login === true) {
+      navigate('/change-password');
+    }
+  }, [user, navigate]);
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <div
+        style={{
+          position: 'fixed',
+          bottom: '20px',
+          right: '20px',
+          zIndex: 1000,
+        }}
+      >
+        <button
+          onClick={logout}
+          style={{
+            padding: '8px 16px',
+            backgroundColor: '#ff6b6b',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '14px',
+          }}
+        >
+          Logout
+        </button>
+      </div>
+
+      <Dashboard />
+    </div>
+  );
+}
+
 
 export default App;
