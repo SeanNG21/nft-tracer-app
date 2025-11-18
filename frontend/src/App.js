@@ -9,7 +9,6 @@ import './App.css';
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
 
 function App() {
-  // State
   const [sessions, setSessions] = useState([]);
   const [files, setFiles] = useState([]);
   const [modes, setModes] = useState([]);
@@ -22,15 +21,14 @@ function App() {
   });
   const [selectedSession, setSelectedSession] = useState(null);
   const [sessionStats, setSessionStats] = useState(null);
-  const [sessionDetailsTab, setSessionDetailsTab] = useState('overview'); // overview, realtime, events
+  const [sessionDetailsTab, setSessionDetailsTab] = useState('overview');
   const [health, setHealth] = useState(null);
   const [loading, setLoading] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [error, setError] = useState(null);
-  const [activeTab, setActiveTab] = useState('sessions'); // sessions, realtime, discovery, files
-  const [selectedTraceFile, setSelectedTraceFile] = useState(null); // For trace analyzer
+  const [activeTab, setActiveTab] = useState('sessions');
+  const [selectedTraceFile, setSelectedTraceFile] = useState(null);
 
-  // Load initial data
   useEffect(() => {
     checkHealth();
     loadModes();
@@ -39,7 +37,6 @@ function App() {
     loadFiles();
   }, []);
 
-  // Poll active sessions
   useEffect(() => {
     const interval = setInterval(() => {
       if (sessions.length > 0) {
@@ -53,7 +50,6 @@ function App() {
     return () => clearInterval(interval);
   }, [sessions, selectedSession]);
 
-  // API Calls
   const checkHealth = async () => {
     try {
       const res = await axios.get(`${API_BASE}/health`);
@@ -226,7 +222,6 @@ function App() {
         </div>
       )}
 
-      {/* Trace Analyzer View */}
       {selectedTraceFile ? (
         <div className="trace-analyzer-view">
           <div className="trace-analyzer-header">
@@ -241,7 +236,6 @@ function App() {
         </div>
       ) : (
         <div className="container">
-        {/* Tabs */}
         <div className="tabs">
           <button 
             className={`tab ${activeTab === 'sessions' ? 'active' : ''}`}
@@ -275,7 +269,6 @@ function App() {
           </button>
         </div>
 
-        {/* TAB: Sessions */}
         {activeTab === 'sessions' && (
           <>
             <section className="card">
@@ -310,7 +303,7 @@ function App() {
                   </select>
                 </div>
 
-                {(newSession.mode === 'universal' || newSession.mode === 'full') && (
+                {newSession.mode === 'full' && (
                   <div className="form-group">
                     <label>Max Functions</label>
                     <input
@@ -373,7 +366,7 @@ function App() {
                         </div>
                       </div>
 
-                      {(session.mode === 'universal' || session.mode === 'full') && (
+                      {session.mode === 'full' && (
                         <div className="session-stats">
                           <div className="stat">
                             <span className="stat-label">Active Packets</span>
@@ -415,7 +408,6 @@ function App() {
               )}
             </section>
 
-            {/* Session Details with Tabs */}
             {sessionStats && (
               <section className="card">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
@@ -432,7 +424,6 @@ function App() {
                   </button>
                 </div>
 
-                {/* Tabs for session details */}
                 <div className="tabs" style={{ marginBottom: '1.5rem' }}>
                   <button
                     className={`tab ${sessionDetailsTab === 'overview' ? 'active' : ''}`}
@@ -454,7 +445,6 @@ function App() {
                   </button>
                 </div>
 
-                {/* Tab Content: Overview */}
                 {sessionDetailsTab === 'overview' && (
                   <div className="details-grid">
                     <div className="detail">
@@ -505,21 +495,6 @@ function App() {
                       </>
                     )}
 
-                    {sessionStats.mode === 'universal' && sessionStats.top_functions && (
-                      <div className="detail" style={{gridColumn: '1 / -1'}}>
-                        <span className="detail-label">Top Functions</span>
-                        <div className="top-functions">
-                          {Object.entries(sessionStats.top_functions).map(([func, count]) => (
-                            <div key={func} className="function-item">
-                              <span>{func}</span>
-                              <span className="badge">{count}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Realtime stats summary in overview */}
                     {sessionStats.realtime_stats && (
                       <div className="detail" style={{gridColumn: '1 / -1', marginTop: '1rem'}}>
                         <div style={{ 
@@ -540,7 +515,6 @@ function App() {
                   </div>
                 )}
 
-                {/* Tab Content: Realtime Stats */}
                 {sessionDetailsTab === 'realtime' && (
                   <div>
                     {sessionStats.realtime_stats || health?.realtime_available ? (
@@ -559,7 +533,6 @@ function App() {
                   </div>
                 )}
 
-                {/* Tab Content: Events Log */}
                 {sessionDetailsTab === 'events' && (
                   <div style={{ textAlign: 'center', padding: '3rem', background: '#f8f9fa', borderRadius: '12px' }}>
                     <h3 style={{ color: '#667eea', marginBottom: '1rem' }}>📝 Events Log</h3>
@@ -582,24 +555,22 @@ function App() {
           </>
         )}
 
-        {/* TAB: Realtime */}
         {activeTab === 'realtime' && <RealtimeView />}
 
-        {/* TAB: Function Discovery */}
         {activeTab === 'discovery' && (
           <>
             <section className="card">
               <h2>🔬 BTF Function Discovery</h2>
               <p className="card-description">
                 Tự động phát hiện tất cả kernel functions xử lý sk_buff từ BTF (BPF Type Format).
-                Cần thiết cho chế độ Universal và Full Tracer.
+                Cần thiết cho chế độ Full Tracer.
               </p>
 
               {!functions ? (
                 <div className="discovery-section">
                   <div className="info-box">
                     <h3>⚠️ Chưa Discover Functions</h3>
-                    <p>Bạn cần discover functions trước khi sử dụng Universal/Full Tracer.</p>
+                    <p>Bạn cần discover functions trước khi sử dụng Full Tracer.</p>
                     <p>Quá trình này sẽ quét kernel BTF và tìm tất cả functions xử lý packet.</p>
                   </div>
                   <button
@@ -657,7 +628,6 @@ function App() {
           </>
         )}
 
-        {/* TAB: Files */}
         {activeTab === 'files' && (
           <section className="card">
             <h2>📁 Kết quả Trace ({files.length})</h2>
@@ -696,7 +666,6 @@ function App() {
           </section>
         )}
 
-        {/* TAB: NFTables Manager */}
         {activeTab === 'nftables' && (
           <NFTablesManager />
         )}

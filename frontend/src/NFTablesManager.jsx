@@ -5,12 +5,11 @@ import './NFTablesManager.css';
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
 
 function NFTablesManager() {
-  const [activeTab, setActiveTab] = useState('view'); // 'view' or 'manage'
+  const [activeTab, setActiveTab] = useState('view');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [nftHealth, setNftHealth] = useState(null);
 
-  // Tab 1: View Rules state
   const [ruleset, setRuleset] = useState(null);
   const [ruleTree, setRuleTree] = useState(null);
   const [filters, setFilters] = useState({
@@ -22,15 +21,13 @@ function NFTablesManager() {
   });
   const [expandedItems, setExpandedItems] = useState({});
 
-  // Tab 2: Manage Rules state
-  const [manageMode, setManageMode] = useState('add'); // 'add', 'edit', 'delete'
+  const [manageMode, setManageMode] = useState('add');
   const [tables, setTables] = useState([]);
   const [chains, setChains] = useState([]);
   const [ruleForm, setRuleForm] = useState({
     family: 'ip',
     table: '',
     chain: '',
-    // Match conditions
     protocol: '',
     tcpDport: '',
     tcpSport: '',
@@ -41,18 +38,15 @@ function NFTablesManager() {
     iifname: '',
     oifname: '',
     ctState: '',
-    // Action
     action: 'accept',
     jumpTarget: '',
     logPrefix: '',
     counterEnabled: false,
-    // For edit mode
     handle: null
   });
   const [rulePreview, setRulePreview] = useState('');
   const [selectedRule, setSelectedRule] = useState(null);
 
-  // Check nftables health on mount
   useEffect(() => {
     checkNftHealth();
     fetchTables();
@@ -66,10 +60,6 @@ function NFTablesManager() {
       setError('Failed to check nftables availability');
     }
   };
-
-  // ============================================================================
-  // TAB 1: VIEW RULES
-  // ============================================================================
 
   const fetchRuleset = async () => {
     setLoading(true);
@@ -98,7 +88,6 @@ function NFTablesManager() {
     const filtered = {};
 
     Object.entries(tree).forEach(([family, tables]) => {
-      // Filter by family
       if (filters.family && family !== filters.family) return;
 
       filtered[family] = {};
@@ -110,18 +99,15 @@ function NFTablesManager() {
         };
 
         Object.entries(tableData.chains).forEach(([chainName, chainData]) => {
-          // Filter by chain name
           if (filters.chainName && !chainName.toLowerCase().includes(filters.chainName.toLowerCase())) {
             return;
           }
 
           const filteredRules = chainData.rules.filter(rule => {
-            // Filter by handle
             if (filters.ruleHandle && rule.handle !== parseInt(filters.ruleHandle)) {
               return false;
             }
 
-            // Filter by verdict
             if (filters.verdict) {
               const ruleText = rule.rule_text.toLowerCase();
               if (!ruleText.includes(filters.verdict.toLowerCase())) {
@@ -129,7 +115,6 @@ function NFTablesManager() {
               }
             }
 
-            // Filter by text search
             if (filters.textSearch) {
               const searchText = filters.textSearch.toLowerCase();
               const ruleText = rule.rule_text.toLowerCase();
@@ -149,13 +134,11 @@ function NFTablesManager() {
           }
         });
 
-        // Remove table if no chains match
         if (Object.keys(filtered[family][tableName].chains).length === 0) {
           delete filtered[family][tableName];
         }
       });
 
-      // Remove family if no tables match
       if (Object.keys(filtered[family]).length === 0) {
         delete filtered[family];
       }
@@ -190,13 +173,11 @@ function NFTablesManager() {
     setManageMode('edit');
     setActiveTab('manage');
 
-    // Parse rule and populate form
     setRuleForm({
       family,
       table,
       chain,
       handle: rule.handle,
-      // Parse rule_text to extract conditions (simplified)
       protocol: '',
       tcpDport: '',
       tcpSport: '',
@@ -215,13 +196,8 @@ function NFTablesManager() {
       counterEnabled: rule.rule_text.includes('counter')
     });
 
-    // Load chains for selected table
     fetchChains(family, table);
   };
-
-  // ============================================================================
-  // TAB 2: MANAGE RULES
-  // ============================================================================
 
   const fetchTables = async () => {
     try {
@@ -256,12 +232,10 @@ function NFTablesManager() {
   const generateRulePreview = () => {
     const parts = [];
 
-    // Protocol
     if (ruleForm.protocol) {
       parts.push(ruleForm.protocol);
     }
 
-    // Ports
     if (ruleForm.tcpDport) {
       parts.push(`tcp dport ${ruleForm.tcpDport}`);
     }
@@ -275,7 +249,6 @@ function NFTablesManager() {
       parts.push(`udp sport ${ruleForm.udpSport}`);
     }
 
-    // IP addresses
     if (ruleForm.ipSaddr) {
       parts.push(`ip saddr ${ruleForm.ipSaddr}`);
     }
@@ -283,7 +256,6 @@ function NFTablesManager() {
       parts.push(`ip daddr ${ruleForm.ipDaddr}`);
     }
 
-    // Interfaces
     if (ruleForm.iifname) {
       parts.push(`iifname "${ruleForm.iifname}"`);
     }
@@ -291,22 +263,18 @@ function NFTablesManager() {
       parts.push(`oifname "${ruleForm.oifname}"`);
     }
 
-    // Connection tracking
     if (ruleForm.ctState) {
       parts.push(`ct state ${ruleForm.ctState}`);
     }
 
-    // Counter
     if (ruleForm.counterEnabled) {
       parts.push('counter');
     }
 
-    // Log
     if (ruleForm.action === 'log' && ruleForm.logPrefix) {
       parts.push(`log prefix "${ruleForm.logPrefix}"`);
     }
 
-    // Action
     if (ruleForm.action === 'jump' || ruleForm.action === 'goto') {
       parts.push(`${ruleForm.action} ${ruleForm.jumpTarget}`);
     } else if (ruleForm.action !== 'log') {
@@ -339,10 +307,8 @@ function NFTablesManager() {
 
       alert('Rule added successfully!');
 
-      // Refresh ruleset
       await fetchRuleset();
 
-      // Reset form
       resetRuleForm();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to add rule');
@@ -373,10 +339,8 @@ function NFTablesManager() {
 
       alert('Rule updated successfully!');
 
-      // Refresh ruleset
       await fetchRuleset();
 
-      // Switch back to view tab
       setActiveTab('view');
       setManageMode('add');
       resetRuleForm();
@@ -405,7 +369,6 @@ function NFTablesManager() {
 
       alert('Rule deleted successfully!');
 
-      // Refresh ruleset
       await fetchRuleset();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to delete rule');
@@ -438,10 +401,6 @@ function NFTablesManager() {
     setRulePreview('');
     setSelectedRule(null);
   };
-
-  // ============================================================================
-  // RENDER
-  // ============================================================================
 
   const filteredTree = applyFilters(ruleTree);
 
