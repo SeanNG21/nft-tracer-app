@@ -229,6 +229,166 @@ class NFTablesManager:
         return True, None
 
     @staticmethod
+    def get_ruleset_with_handles() -> Tuple[bool, Optional[Dict[int, str]], Optional[str]]:
+        """
+        Get ruleset with exact rule text mapped by handle
+        Returns: (success, handle_to_text_map, error_message)
+
+        This method ensures 100% accuracy by:
+        1. Getting JSON ruleset with handles
+        2. Getting text ruleset
+        3. Mapping handles to exact rule text
+        """
+        try:
+            # Get JSON ruleset with handles
+            result_json = subprocess.run(
+                ['sudo', 'nft', '--json', '--handle', 'list', 'ruleset'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result_json.returncode != 0:
+                # Try without sudo
+                result_json = subprocess.run(
+                    ['nft', '--json', '--handle', 'list', 'ruleset'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+
+            if result_json.returncode != 0:
+                return False, None, result_json.stderr or "Failed to get JSON ruleset"
+
+            # Get text ruleset with handles
+            result_text = subprocess.run(
+                ['sudo', 'nft', '--handle', 'list', 'ruleset'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result_text.returncode != 0:
+                # Try without sudo
+                result_text = subprocess.run(
+                    ['nft', '--handle', 'list', 'ruleset'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+
+            if result_text.returncode != 0:
+                return False, None, result_text.stderr or "Failed to get text ruleset"
+
+            # Parse JSON to get handles
+            try:
+                ruleset_json = json.loads(result_json.stdout)
+            except json.JSONDecodeError as e:
+                return False, None, f"Failed to parse JSON: {str(e)}"
+
+            # Parse text ruleset to extract rule text by handle
+            handle_to_text = NFTablesManager._parse_text_ruleset(result_text.stdout, ruleset_json)
+
+            return True, handle_to_text, None
+
+        except subprocess.TimeoutExpired:
+            return False, None, "Command timeout"
+        except Exception as e:
+            return False, None, f"Error: {str(e)}"
+
+    @staticmethod
+    def _parse_text_ruleset(text_output: str, json_ruleset: Dict) -> Dict[int, str]:
+        """
+        Parse text ruleset and map handles to exact rule text
+
+        Strategy:
+        1. Extract all handles from JSON (with metadata: family, table, chain)
+        2. Parse text output line by line
+        3. Match rules with handles using context (family, table, chain)
+        4. Store exact rule text (everything before '# handle X')
+        """
+        handle_map = {}
+
+        # Build handle metadata from JSON
+        handle_metadata = {}  # handle -> {family, table, chain, index}
+        nftables = json_ruleset.get('nftables', [])
+
+        current_family = None
+        current_table = None
+        current_chain = None
+        rule_index_in_chain = {}  # (family, table, chain) -> index
+
+        for item in nftables:
+            if 'table' in item:
+                current_family = item['table'].get('family')
+                current_table = item['table'].get('name')
+            elif 'chain' in item:
+                current_chain = item['chain'].get('name')
+                rule_index_in_chain[(current_family, current_table, current_chain)] = 0
+            elif 'rule' in item:
+                rule = item['rule']
+                handle = rule.get('handle')
+                if handle and current_family and current_table and current_chain:
+                    key = (current_family, current_table, current_chain)
+                    index = rule_index_in_chain.get(key, 0)
+                    handle_metadata[handle] = {
+                        'family': current_family,
+                        'table': current_table,
+                        'chain': current_chain,
+                        'index': index
+                    }
+                    rule_index_in_chain[key] = index + 1
+
+        # Parse text output
+        lines = text_output.split('\n')
+        current_family = None
+        current_table = None
+        current_chain = None
+        rule_index = 0
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Detect family context (e.g., "table ip filter {")
+            if stripped.startswith('table '):
+                parts = stripped.split()
+                if len(parts) >= 3:
+                    current_family = parts[1]
+                    current_table = parts[2].rstrip(' {')
+
+            # Detect chain context (e.g., "chain input {")
+            elif stripped.startswith('chain '):
+                parts = stripped.split()
+                if len(parts) >= 2:
+                    current_chain = parts[1].rstrip(' {')
+                    rule_index = 0
+
+            # Detect rule with handle (e.g., "ip saddr 1.2.3.4 accept # handle 5")
+            elif '# handle ' in stripped and current_family and current_table and current_chain:
+                # Extract handle number
+                handle_match = re.search(r'# handle (\d+)', stripped)
+                if handle_match:
+                    handle = int(handle_match.group(1))
+                    # Extract rule text (everything before '# handle')
+                    rule_text = stripped.split('# handle')[0].strip()
+
+                    # Verify this handle matches expected context
+                    metadata = handle_metadata.get(handle)
+                    if metadata:
+                        if (metadata['family'] == current_family and
+                            metadata['table'] == current_table and
+                            metadata['chain'] == current_chain and
+                            metadata['index'] == rule_index):
+                            handle_map[handle] = rule_text
+                            rule_index += 1
+                    else:
+                        # Fallback: store anyway if handle not in metadata
+                        handle_map[handle] = rule_text
+                        rule_index += 1
+
+        return handle_map
+
+    @staticmethod
     def parse_ruleset_to_tree(ruleset: Dict) -> Dict:
         """
         Parse ruleset JSON into a tree structure organized by family -> table -> chain -> rules

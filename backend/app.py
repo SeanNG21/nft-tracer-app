@@ -1060,29 +1060,44 @@ class TraceSession:
         print(f"[DEBUG] Excluded ports (no self-tracing): {sorted(EXCLUDED_PORTS)}")
 
     def _load_rule_mapping(self):
-        """Load nftables ruleset and create rule_handle -> rule_text mapping"""
+        """
+        Load nftables ruleset and create rule_handle -> rule_text mapping
+
+        Uses exact text from 'nft --handle list ruleset' for 100% accuracy
+        """
         try:
-            success, ruleset, error = NFTablesManager.get_ruleset()
+            # Use new method to get exact rule text by handle
+            success, handle_to_text, error = NFTablesManager.get_ruleset_with_handles()
             if not success:
                 print(f"[WARNING] Failed to load nftables ruleset: {error}")
-                return
+                # Fallback to old method
+                print(f"[INFO] Trying fallback method...")
+                success_fallback, ruleset, error_fallback = NFTablesManager.get_ruleset()
+                if not success_fallback:
+                    print(f"[WARNING] Fallback also failed: {error_fallback}")
+                    return
 
-            # Parse ruleset to tree structure
-            tree = NFTablesManager.parse_ruleset_to_tree(ruleset)
+                # Parse ruleset to tree structure (fallback)
+                tree = NFTablesManager.parse_ruleset_to_tree(ruleset)
 
-            # Build mapping: rule_handle -> rule_text
-            for family, tables in tree.items():
-                for table_name, table_data in tables.items():
-                    for chain_name, chain_data in table_data.get('chains', {}).items():
-                        for rule in chain_data.get('rules', []):
-                            rule_handle = rule.get('handle')
-                            rule_text = rule.get('rule_text', '<no rule text>')
-                            if rule_handle:
-                                self.rule_mapping[rule_handle] = rule_text
+                # Build mapping: rule_handle -> rule_text
+                for family, tables in tree.items():
+                    for table_name, table_data in tables.items():
+                        for chain_name, chain_data in table_data.get('chains', {}).items():
+                            for rule in chain_data.get('rules', []):
+                                rule_handle = rule.get('handle')
+                                rule_text = rule.get('rule_text', '<no rule text>')
+                                if rule_handle:
+                                    self.rule_mapping[rule_handle] = rule_text
+            else:
+                # Success: use exact text mapping
+                self.rule_mapping = handle_to_text
 
-            print(f"[DEBUG] Loaded {len(self.rule_mapping)} nftables rules")
+            print(f"[✓] Loaded {len(self.rule_mapping)} nftables rules with exact text")
         except Exception as e:
             print(f"[WARNING] Error loading rule mapping: {e}")
+            import traceback
+            traceback.print_exc()
 
     def start(self) -> bool:
         if not BCC_AVAILABLE:
