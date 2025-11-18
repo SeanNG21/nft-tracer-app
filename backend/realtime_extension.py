@@ -1632,7 +1632,8 @@ class SessionStatsTracker:
                 if hook_num != 255:
                     self.stats_by_hook[hook_name] += 1
 
-                if verdict != 255:
+                # Track verdict - ONLY from nft_immediate_eval
+                if verdict != 255 and func_name == 'nft_immediate_eval':
                     self.stats_by_verdict[verdict_name] += 1
             
             # Update hook stats
@@ -1642,10 +1643,11 @@ class SessionStatsTracker:
             # Update layer stats
             layer_stats = hook_stats['layers'][layer_name]
             layer_stats['packets_in'] += 1
-            
-            # Track verdict
-            layer_stats['verdict_breakdown'][verdict_name] += 1
-            
+
+            # Track verdict - ONLY from nft_immediate_eval (same logic as NodeStats)
+            if verdict_name and func_name == 'nft_immediate_eval':
+                layer_stats['verdict_breakdown'][verdict_name] += 1
+
             # Track function
             if func_name:
                 layer_stats['function_calls'][func_name] += 1
