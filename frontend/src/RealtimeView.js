@@ -89,9 +89,14 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
         {/* Name */}
         <div className="node-name">{stageDef.name}</div>
 
-        {/* Count */}
+        {/* Count and In-Flight */}
         {isActive && (
-          <div className="node-count">{count.toLocaleString()}</div>
+          <div className="node-count">
+            <div>{count.toLocaleString()}</div>
+            {nodeData?.in_flight > 0 && (
+              <div className="node-in-flight">⏳ {nodeData.in_flight}</div>
+            )}
+          </div>
         )}
 
         {/* Top Functions */}
@@ -134,6 +139,9 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
             <div className="tooltip-stat">Events: {count.toLocaleString()}</div>
             {nodeData?.unique_packets && (
               <div className="tooltip-stat">Unique: {nodeData.unique_packets}</div>
+            )}
+            {nodeData?.in_flight > 0 && (
+              <div className="tooltip-stat" style={{ color: '#ffeb3b' }}>In-flight: {nodeData.in_flight}</div>
             )}
             {nodeData?.latency && nodeData.latency.p50 > 0 && (
               <div className="tooltip-section">
@@ -383,6 +391,78 @@ function RealtimeView() {
               </div>
             </div>
           </div>
+
+          {/* ENHANCED: Pipeline Statistics Panel */}
+          {stats && stats.pipelines && (
+            <div className="realtime-panel full-width">
+              <h3>🚀 Pipeline Statistics</h3>
+              <div className="pipeline-stats-grid">
+                {Object.entries(stats.pipelines).map(([pipelineName, pipelineData]) => {
+                  if (pipelineData.started === 0) return null;
+                  const completionRate = pipelineData.started > 0
+                    ? ((pipelineData.completed / pipelineData.started) * 100).toFixed(1)
+                    : 0;
+
+                  return (
+                    <div key={pipelineName} className="pipeline-stat-card">
+                      <div className="pipeline-stat-header">{pipelineName}</div>
+                      <div className="pipeline-stat-row">
+                        <span className="pipeline-stat-label">Started:</span>
+                        <span className="pipeline-stat-value success">{pipelineData.started.toLocaleString()}</span>
+                      </div>
+                      <div className="pipeline-stat-row">
+                        <span className="pipeline-stat-label">Completed:</span>
+                        <span className="pipeline-stat-value primary">{pipelineData.completed.toLocaleString()}</span>
+                      </div>
+                      <div className="pipeline-stat-row">
+                        <span className="pipeline-stat-label">In Progress:</span>
+                        <span className="pipeline-stat-value warning">{pipelineData.in_progress.toLocaleString()}</span>
+                      </div>
+                      <div className="pipeline-stat-row">
+                        <span className="pipeline-stat-label">Completion Rate:</span>
+                        <span className="pipeline-stat-value info">{completionRate}%</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ENHANCED: Netfilter Verdict Statistics Panel */}
+          {stats && stats.total_verdicts && Object.keys(stats.total_verdicts).length > 0 && (
+            <div className="realtime-panel full-width">
+              <h3>⚖️ Netfilter Verdict Statistics</h3>
+              <div className="verdict-stats-grid">
+                {Object.entries(stats.total_verdicts).map(([verdict, count]) => {
+                  const verdictColors = {
+                    'ACCEPT': '#28a745',
+                    'DROP': '#dc3545',
+                    'STOLEN': '#6c757d',
+                    'QUEUE': '#ffc107',
+                    'STOP': '#fd7e14',
+                    'REPEAT': '#17a2b8'
+                  };
+                  const color = verdictColors[verdict] || '#6c757d';
+                  const total = Object.values(stats.total_verdicts).reduce((sum, c) => sum + c, 0);
+                  const percentage = total > 0 ? ((count / total) * 100).toFixed(1) : 0;
+
+                  return (
+                    <div key={verdict} className="verdict-stat-card" style={{ borderColor: color }}>
+                      <div className="verdict-stat-icon" style={{ backgroundColor: color }}>
+                        {verdict === 'ACCEPT' ? '✓' : verdict === 'DROP' ? '✗' : verdict === 'STOLEN' ? '⚡' : '⚠'}
+                      </div>
+                      <div className="verdict-stat-content">
+                        <div className="verdict-stat-name" style={{ color }}>{verdict}</div>
+                        <div className="verdict-stat-count">{count.toLocaleString()}</div>
+                        <div className="verdict-stat-percentage">{percentage}%</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* ENHANCED: Pipeline Flow Visualization with Detailed Metrics */}
           {stats && stats.nodes && Object.keys(stats.nodes).length > 0 && (

@@ -305,6 +305,7 @@ class NodeStats:
     truncated_count: int = 0
     first_ts: Optional[float] = None
     last_ts: Optional[float] = None
+    in_flight_packets: set = field(default_factory=set)  # packets currently on this node
 
     def add_event(self, skb_addr: str, latency_us: float = 0, function: str = None,
                   verdict: str = None, error: bool = False):
@@ -366,7 +367,8 @@ class NodeStats:
             'verdict': verdict_dict,
             'errors': self.error_count,
             'drops': self.drop_count,
-            'truncated': self.truncated_count
+            'truncated': self.truncated_count,
+            'in_flight': len(self.in_flight_packets)
         }
 
 @dataclass
@@ -381,6 +383,20 @@ class EdgeStats:
             'from': self.from_node,
             'to': self.to_node,
             'count': self.count
+        }
+
+@dataclass
+class PipelineStats:
+    """Statistics for packet pipelines (Inbound, Outbound, Local Delivery, Forward)"""
+    started: int = 0  # packets that entered this pipeline
+    completed: int = 0  # packets that completed this pipeline
+    in_progress: set = field(default_factory=set)  # packets currently in this pipeline
+
+    def to_dict(self) -> Dict:
+        return {
+            'started': self.started,
+            'completed': self.completed,
+            'in_progress': len(self.in_progress)
         }
 
 @dataclass
@@ -521,6 +537,14 @@ class RealtimeStats:
         self.nodes: Dict[str, NodeStats] = {}  # node_name -> NodeStats
         self.edges: Dict[tuple, EdgeStats] = {}  # (from, to) -> EdgeStats
         self.skb_paths: Dict[str, List[str]] = {}  # skb_addr -> [node1, node2, ...]
+
+        # ENHANCED: Pipeline completion tracking
+        self.pipelines: Dict[str, PipelineStats] = {
+            'Inbound': PipelineStats(),
+            'Outbound': PipelineStats(),
+            'Local Delivery': PipelineStats(),
+            'Forward': PipelineStats()
+        }
     
     def get_hook(self, hook_name: str) -> HookStats:
         if hook_name not in self.hooks:
@@ -627,6 +651,46 @@ class RealtimeStats:
 
         return layer_name
 
+    def _track_pipeline_progress(self, skb_addr: str, node_name: str, verdict: str):
+        """Track pipeline start and completion based on node transitions"""
+        # Define pipeline entry and exit nodes
+        PIPELINE_ENTRY_NODES = {
+            'Inbound': 'NIC',
+            'Outbound': 'Application',
+            'Local Delivery': 'Netfilter INPUT',
+            'Forward': 'Netfilter FORWARD'
+        }
+
+        PIPELINE_EXIT_NODES = {
+            'Inbound': ['Socket', 'Netfilter FORWARD'],  # ends at Socket (local) or FORWARD (routing decision)
+            'Outbound': ['NIC TX'],
+            'Local Delivery': ['Socket'],
+            'Forward': ['NIC TX']
+        }
+
+        # Track pipeline starts
+        for pipeline_name, entry_node in PIPELINE_ENTRY_NODES.items():
+            if node_name == entry_node:
+                pipeline_stats = self.pipelines[pipeline_name]
+                if skb_addr not in pipeline_stats.in_progress:
+                    pipeline_stats.started += 1
+                    pipeline_stats.in_progress.add(skb_addr)
+
+        # Track pipeline completions
+        for pipeline_name, exit_nodes in PIPELINE_EXIT_NODES.items():
+            if node_name in exit_nodes:
+                pipeline_stats = self.pipelines[pipeline_name]
+                if skb_addr in pipeline_stats.in_progress:
+                    pipeline_stats.completed += 1
+                    pipeline_stats.in_progress.discard(skb_addr)
+
+        # Handle DROP verdict - complete all pipelines for this packet
+        if verdict == 'DROP':
+            for pipeline_stats in self.pipelines.values():
+                if skb_addr in pipeline_stats.in_progress:
+                    pipeline_stats.completed += 1
+                    pipeline_stats.in_progress.discard(skb_addr)
+
     def process_event(self, event: PacketEvent):
         """Process a single packet event and update statistics"""
         with self._lock:
@@ -662,19 +726,28 @@ class RealtimeStats:
                 error=(event.error_code > 0)
             )
 
-            # Track edges (transitions between nodes)
+            # Track edges (transitions between nodes) and in-flight packets
             if event.skb_addr:
                 if event.skb_addr not in self.skb_paths:
                     self.skb_paths[event.skb_addr] = []
 
-                # If there's a previous node, create an edge
+                # If there's a previous node, create an edge and update in-flight tracking
                 if self.skb_paths[event.skb_addr]:
                     prev_node = self.skb_paths[event.skb_addr][-1]
                     if prev_node != pipeline_layer:  # Avoid self-loops
                         self.add_edge(prev_node, pipeline_layer)
+                        # Remove from previous node's in-flight set
+                        prev_node_stats = self.get_node(prev_node)
+                        prev_node_stats.in_flight_packets.discard(event.skb_addr)
+
+                # Add packet to current node's in-flight set
+                node.in_flight_packets.add(event.skb_addr)
 
                 # Add current node to path
                 self.skb_paths[event.skb_addr].append(pipeline_layer)
+
+                # ENHANCED: Track pipeline start/completion
+                self._track_pipeline_progress(event.skb_addr, pipeline_layer, event.verdict_name)
 
                 # Limit path history
                 if len(self.skb_paths) > 10000:
@@ -764,6 +837,18 @@ class RealtimeStats:
             for edge_stats in self.edges.values():
                 edges_data.append(edge_stats.to_dict())
 
+            # ENHANCED: Pipeline statistics
+            pipelines_data = {}
+            for pipeline_name, pipeline_stats in self.pipelines.items():
+                pipelines_data[pipeline_name] = pipeline_stats.to_dict()
+
+            # Calculate total verdict statistics across all netfilter nodes
+            total_verdicts = defaultdict(int)
+            for node_name, node_stats in self.nodes.items():
+                if 'Netfilter' in node_name and node_stats.verdict_breakdown:
+                    for verdict, count in node_stats.verdict_breakdown.items():
+                        total_verdicts[verdict] += count
+
             return {
                 'total_packets': self.total_packets,
                 'uptime_seconds': round(uptime, 2),
@@ -777,7 +862,11 @@ class RealtimeStats:
                 },
                 # ENHANCED: Detailed node and edge statistics
                 'nodes': nodes_data,
-                'edges': edges_data
+                'edges': edges_data,
+                # ENHANCED: Pipeline completion statistics
+                'pipelines': pipelines_data,
+                # ENHANCED: Total verdict statistics
+                'total_verdicts': dict(total_verdicts)
             }
     
     def reset(self):
@@ -797,6 +886,13 @@ class RealtimeStats:
             self.nodes.clear()
             self.edges.clear()
             self.skb_paths.clear()
+            # ENHANCED: Reset pipeline tracking
+            self.pipelines = {
+                'Inbound': PipelineStats(),
+                'Outbound': PipelineStats(),
+                'Local Delivery': PipelineStats(),
+                'Forward': PipelineStats()
+            }
 
 # ============================================
 # HELPER FUNCTIONS
