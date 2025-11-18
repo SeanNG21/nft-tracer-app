@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Minimal SocketIO test server
-Test if SocketIO can run properly
-"""
 
 from flask import Flask
 from flask_cors import CORS
@@ -11,7 +7,6 @@ from flask_socketio import SocketIO, emit
 app = Flask(__name__)
 CORS(app)
 
-# Create SocketIO instance
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=True, engineio_logger=True)
 
 @app.route('/')
@@ -22,7 +17,6 @@ def index():
 def test():
     return {'socketio': 'ready'}
 
-# SocketIO event handlers
 @socketio.on('connect')
 def handle_connect():
     print('[TEST] Client connected!')
@@ -48,6 +42,5 @@ if __name__ == '__main__':
     print("  - WebSocket: ws://localhost:5001/socket.io/")
     print("=" * 60)
     print()
-    
-    # Run with SocketIO
+
     socketio.run(app, host='0.0.0.0', port=5001, debug=True, allow_unsafe_werkzeug=True)

@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-NFTables Manager Module
-Provides API functions for managing nftables rules
-"""
 
 import subprocess
 import json
@@ -11,11 +7,9 @@ from typing import Dict, List, Optional, Tuple
 
 
 class NFTablesManager:
-    """Manager for nftables operations"""
 
     @staticmethod
     def check_nft_available() -> Tuple[bool, str]:
-        """Check if nft command is available and accessible"""
         try:
             result = subprocess.run(
                 ['which', 'nft'],
@@ -24,7 +18,6 @@ class NFTablesManager:
                 timeout=5
             )
             if result.returncode == 0:
-                # Check if we can run nft (may need sudo)
                 version_result = subprocess.run(
                     ['nft', '--version'],
                     capture_output=True,
@@ -34,7 +27,6 @@ class NFTablesManager:
                 if version_result.returncode == 0:
                     return True, "nft available"
                 else:
-                    # Try with sudo
                     sudo_result = subprocess.run(
                         ['sudo', '-n', 'nft', '--version'],
                         capture_output=True,
@@ -52,12 +44,7 @@ class NFTablesManager:
 
     @staticmethod
     def get_ruleset() -> Tuple[bool, Optional[Dict], Optional[str]]:
-        """
-        Get complete nftables ruleset in JSON format
-        Returns: (success, data, error_message)
-        """
         try:
-            # Try without sudo first
             result = subprocess.run(
                 ['nft', '--json', 'list', 'ruleset'],
                 capture_output=True,
@@ -65,7 +52,6 @@ class NFTablesManager:
                 timeout=10
             )
 
-            # If permission denied, try with sudo
             if result.returncode != 0:
                 result = subprocess.run(
                     ['sudo', 'nft', '--json', 'list', 'ruleset'],
@@ -90,10 +76,6 @@ class NFTablesManager:
 
     @staticmethod
     def get_tables() -> Tuple[bool, Optional[List[Dict]], Optional[str]]:
-        """
-        Get list of all tables
-        Returns: (success, tables_list, error_message)
-        """
         success, ruleset, error = NFTablesManager.get_ruleset()
         if not success:
             return False, None, error
@@ -114,10 +96,6 @@ class NFTablesManager:
 
     @staticmethod
     def get_chains(family: str, table: str) -> Tuple[bool, Optional[List[Dict]], Optional[str]]:
-        """
-        Get chains for a specific table
-        Returns: (success, chains_list, error_message)
-        """
         success, ruleset, error = NFTablesManager.get_ruleset()
         if not success:
             return False, None, error
@@ -142,16 +120,10 @@ class NFTablesManager:
 
     @staticmethod
     def add_rule(family: str, table: str, chain: str, rule_text: str) -> Tuple[bool, Optional[str]]:
-        """
-        Add a new rule to specified chain
-        Returns: (success, error_message)
-        """
         try:
-            # Validate inputs
             if not all([family, table, chain, rule_text]):
                 return False, "Missing required parameters"
 
-            # Build command
             cmd = [
                 'sudo', 'nft', 'add', 'rule',
                 family, table, chain, rule_text
@@ -177,16 +149,10 @@ class NFTablesManager:
 
     @staticmethod
     def delete_rule(family: str, table: str, chain: str, handle: int) -> Tuple[bool, Optional[str]]:
-        """
-        Delete a rule by handle
-        Returns: (success, error_message)
-        """
         try:
-            # Validate inputs
             if not all([family, table, chain]) or handle is None:
                 return False, "Missing required parameters"
 
-            # Build command
             cmd = [
                 'sudo', 'nft', 'delete', 'rule',
                 family, table, chain, 'handle', str(handle)
@@ -212,16 +178,10 @@ class NFTablesManager:
 
     @staticmethod
     def update_rule(family: str, table: str, chain: str, handle: int, new_rule_text: str) -> Tuple[bool, Optional[str]]:
-        """
-        Update a rule by deleting and re-adding it
-        Returns: (success, error_message)
-        """
-        # Delete old rule
         success, error = NFTablesManager.delete_rule(family, table, chain, handle)
         if not success:
             return False, f"Failed to delete old rule: {error}"
 
-        # Add new rule
         success, error = NFTablesManager.add_rule(family, table, chain, new_rule_text)
         if not success:
             return False, f"Failed to add new rule: {error}"
@@ -230,13 +190,9 @@ class NFTablesManager:
 
     @staticmethod
     def parse_ruleset_to_tree(ruleset: Dict) -> Dict:
-        """
-        Parse ruleset JSON into a tree structure organized by family -> table -> chain -> rules
-        """
         tree = {}
         nftables = ruleset.get('nftables', [])
 
-        # First pass: collect tables and chains
         for item in nftables:
             if 'table' in item:
                 table_info = item['table']
@@ -272,7 +228,6 @@ class NFTablesManager:
                     'rules': []
                 }
 
-        # Second pass: collect rules
         for item in nftables:
             if 'rule' in item:
                 rule_info = item['rule']
@@ -284,7 +239,6 @@ class NFTablesManager:
                     table_name in tree[family] and
                     chain_name in tree[family][table_name]['chains']):
 
-                    # Parse rule expression to readable text
                     rule_text = NFTablesManager.parse_rule_expr(rule_info.get('expr', []))
 
                     rule_data = {
@@ -300,10 +254,6 @@ class NFTablesManager:
 
     @staticmethod
     def parse_rule_expr(expr_list: List[Dict]) -> str:
-        """
-        Parse nftables rule expression to human-readable text
-        This is a simplified parser - can be extended for more complex rules
-        """
         parts = []
 
         for expr in expr_list:
@@ -313,7 +263,6 @@ class NFTablesManager:
                 right = match.get('right', {})
                 op = match.get('op', '==')
 
-                # Parse left side (field)
                 left_str = NFTablesManager.parse_expr_value(left)
                 right_str = NFTablesManager.parse_expr_value(right)
 
@@ -351,7 +300,6 @@ class NFTablesManager:
 
     @staticmethod
     def parse_expr_value(value_dict: Dict) -> str:
-        """Parse expression value to string"""
         if isinstance(value_dict, dict):
             if 'payload' in value_dict:
                 payload = value_dict['payload']
@@ -369,7 +317,6 @@ class NFTablesManager:
                 rng = value_dict['range']
                 return f"{rng[0]}-{rng[1]}"
             else:
-                # Try to get first value
                 for key, val in value_dict.items():
                     return str(val)
 

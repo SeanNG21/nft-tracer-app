@@ -3,15 +3,14 @@ import axios from 'axios';
 import io from 'socket.io-client';
 import './Realtime.css';
 import { getNodeDescription } from './PipelineNodeDescriptions';
+import AlertNotification from './components/AlertNotification';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
 const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 'http://localhost:5000';
 
-// Hook order for pipeline (OLD - kept for backward compatibility)
 const HOOK_ORDER = ['PRE_ROUTING', 'LOCAL_IN', 'FORWARD', 'LOCAL_OUT', 'POST_ROUTING'];
 const LAYER_ORDER = ['Ingress', 'L2', 'IP', 'Firewall', 'Socket', 'Egress'];
 
-// Hook icons
 const HOOK_ICONS = {
   'PRE_ROUTING': '⚙️',
   'LOCAL_IN': '📥',
@@ -20,7 +19,6 @@ const HOOK_ICONS = {
   'POST_ROUTING': '⚙️'
 };
 
-// NEW: Pipeline structure definitions for Inbound/Outbound flows
 const PIPELINE_DEFINITIONS = {
   Inbound: {
     mainFlow: [
@@ -58,7 +56,6 @@ const PIPELINE_DEFINITIONS = {
   ]
 };
 
-// Enhanced Pipeline Node Component
 function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
   const count = nodeData?.count || 0;
   const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
@@ -102,10 +99,8 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
           border: `2px solid ${isActive ? (hasIssues ? '#dc3545' : stageDef.color) : '#bbb'}`,
         }}
       >
-        {/* Icon */}
         <div className="node-icon">{stageDef.icon}</div>
 
-        {/* Name */}
         <div className="node-name">{stageDef.name}</div>
 
         {/* Count, In-Flight, and Packet Rate */}
@@ -145,14 +140,12 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
           </div>
         )}
 
-        {/* Latency */}
         {isActive && nodeData?.latency && nodeData.latency.p50 > 0 && (
           <div className="node-latency">
             ⏱️ p50: {nodeData.latency.p50.toFixed(1)}µs
           </div>
         )}
 
-        {/* Verdict for Netfilter nodes */}
         {isActive && isNetfilterNode && verdictData && (
           <div className="node-verdict">
             {Object.entries(verdictData).map(([verdict, vCount]) => {
@@ -168,7 +161,6 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
           </div>
         )}
 
-        {/* Tooltip (shows on hover) */}
         {isActive && (
           <div className="node-tooltip">
             <div className="tooltip-header">{stageDef.name}</div>
@@ -231,18 +223,16 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
   );
 }
 
-// Color based on drop rate
 function getDropRateColor(dropRate) {
   if (dropRate <= 1) {
-    return { bg: 'rgba(40, 167, 69, 0.1)', border: '#28a745', text: '#28a745' }; // Green
+    return { bg: 'rgba(40, 167, 69, 0.1)', border: '#28a745', text: '#28a745' };
   } else if (dropRate <= 3) {
-    return { bg: 'rgba(255, 193, 7, 0.1)', border: '#ffc107', text: '#f0ad4e' }; // Yellow
+    return { bg: 'rgba(255, 193, 7, 0.1)', border: '#ffc107', text: '#f0ad4e' };
   } else {
-    return { bg: 'rgba(220, 53, 69, 0.1)', border: '#dc3545', text: '#dc3545' }; // Red
+    return { bg: 'rgba(220, 53, 69, 0.1)', border: '#dc3545', text: '#dc3545' };
   }
 }
 
-// Format timestamp
 function formatTimestamp(ts) {
   const date = new Date(ts * 1000);
   return date.toLocaleTimeString('en-US', { hour12: false });
@@ -255,10 +245,9 @@ function RealtimeView() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [expandedHooks, setExpandedHooks] = useState(new Set()); // Track multiple expanded hooks
-  
+
   const socketRef = useRef(null);
 
-  // Initialize Socket.IO connection
   useEffect(() => {
     const socket = io(SOCKET_URL, {
       transports: ['websocket', 'polling'],
@@ -278,9 +267,6 @@ function RealtimeView() {
       setConnected(false);
     });
 
-    // Removed packet_event listener - only use stats_update now
-    // We now rely on stats_update every 1s for visualization
-
     socket.on('stats_update', (stats) => {
       console.log('[Realtime] Received stats_update:', stats);
       setStats(stats);
@@ -297,7 +283,6 @@ function RealtimeView() {
     };
   }, []);
 
-  // Load stats periodically - every 1 second to match backend emission
   useEffect(() => {
     if (enabled && connected) {
       const interval = setInterval(loadStats, 1000);
@@ -323,7 +308,7 @@ function RealtimeView() {
       if (enabled) {
         await axios.post(`${API_BASE}/realtime/disable`);
         setEnabled(false);
-        setExpandedHooks(new Set()); // Clear all expanded hooks
+        setExpandedHooks(new Set());
       } else {
         await axios.post(`${API_BASE}/realtime/enable`);
         setEnabled(true);
@@ -340,7 +325,7 @@ function RealtimeView() {
     setLoading(true);
     try {
       await axios.post(`${API_BASE}/realtime/reset`);
-      setExpandedHooks(new Set()); // Clear all expanded hooks
+      setExpandedHooks(new Set());
       await loadStats();
     } catch (err) {
       setError('Failed to reset stats');
@@ -353,9 +338,9 @@ function RealtimeView() {
     setExpandedHooks(prev => {
       const newSet = new Set(prev);
       if (newSet.has(hookName)) {
-        newSet.delete(hookName); // Collapse if already expanded
+        newSet.delete(hookName);
       } else {
-        newSet.add(hookName); // Expand if not expanded
+        newSet.add(hookName);
       }
       return newSet;
     });
@@ -363,6 +348,8 @@ function RealtimeView() {
 
   return (
     <div className="realtime-container">
+      {/* Alert Notifications (top-right corner) */}
+      <AlertNotification enabled={enabled} />
       {/* Header */}
       <div className="realtime-header">
         <div className="realtime-header-left">
@@ -390,7 +377,6 @@ function RealtimeView() {
         </div>
       </div>
 
-      {/* Error */}
       {error && (
         <div className="realtime-error">
           <span>{error}</span>
@@ -398,7 +384,6 @@ function RealtimeView() {
         </div>
       )}
 
-      {/* Disabled Notice */}
       {!enabled ? (
         <div className="realtime-disabled-notice">
           <h3>⚙️ Realtime Tracing Disabled</h3>
@@ -407,7 +392,6 @@ function RealtimeView() {
         </div>
       ) : (
         <>
-          {/* Stats Cards */}
           <div className="realtime-stats-grid">
             <div className="realtime-stat-card primary">
               <div className="stat-icon">📊</div>
@@ -568,7 +552,6 @@ function RealtimeView() {
               <h3>🔄 Enhanced Packet Pipeline Flow</h3>
 
               <div className="pipeline-flow-container">
-                {/* Inbound Pipeline */}
                 {(() => {
                   const inboundNodes = PIPELINE_DEFINITIONS.Inbound.mainFlow.concat(
                     ...Object.values(PIPELINE_DEFINITIONS.Inbound.branches)
@@ -590,7 +573,6 @@ function RealtimeView() {
                         </span>
                       </div>
 
-                      {/* Main Pipeline Flow */}
                       <div className="pipeline-main-flow">
                         <div className="pipeline-stages">
                           {PIPELINE_DEFINITIONS.Inbound.mainFlow.map((stageDef, index, arr) => {
@@ -616,9 +598,7 @@ function RealtimeView() {
                         </div>
                       </div>
 
-                      {/* Branching Point */}
                       <div className="pipeline-branches">
-                        {/* Local Delivery Branch */}
                         <div className="pipeline-branch local">
                           <div className="branch-header">
                             <span className="branch-arrow">⤷</span>
@@ -648,7 +628,6 @@ function RealtimeView() {
                           </div>
                         </div>
 
-                        {/* Forward Branch */}
                         <div className="pipeline-branch forward">
                           <div className="branch-header">
                             <span className="branch-arrow">⤷</span>
@@ -682,7 +661,6 @@ function RealtimeView() {
                   );
                 })()}
 
-                {/* Outbound Pipeline */}
                 {(() => {
                   const outboundCounts = PIPELINE_DEFINITIONS.Outbound.map(s => stats.nodes[s.name]?.count || 0);
                   const hasOutbound = outboundCounts.some(c => c > 0);
@@ -730,17 +708,15 @@ function RealtimeView() {
             </div>
           )}
 
-          {/* LINEAR FLOW GRAPH: Hook Pipeline (OLD - kept for compatibility) */}
           {stats && stats.hooks && (
             <div className="realtime-panel full-width">
               <h3>🔄 Packet Flow Pipeline: Netfilter Hooks</h3>
-              
-              {/* Hook Pipeline - Horizontal Layout */}
+
               <div className="hook-pipeline">
                 {HOOK_ORDER.map((hookName, index) => {
                   const hookData = stats.hooks[hookName];
-                  const isExpanded = expandedHooks.has(hookName); // Check if hook is in Set
-                  
+                  const isExpanded = expandedHooks.has(hookName);
+
                   if (!hookData) {
                     return (
                       <div key={hookName} className="hook-pipeline-item">
@@ -805,7 +781,6 @@ function RealtimeView() {
                         <div className="hook-arrow active">→</div>
                       )}
 
-                      {/* Expanded Layers - Show below hook */}
                       {isExpanded && (
                         <div className="layers-container">
                           {Object.keys(layersData).length === 0 ? (

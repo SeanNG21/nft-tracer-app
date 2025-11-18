@@ -23,6 +23,9 @@ from flask_cors import CORS
 from bcc import BPF
 import ctypes as ct
 
+# Monitoring module
+from monitoring.alert_engine import AlertEngine
+
 # ============================================
 # MAPPINGS AND CONSTANTS
 # ============================================
@@ -1066,6 +1069,15 @@ class RealtimeTracer:
         self.bpf = None
         self.stats = RealtimeStats()
         self.running = False
+
+        # Initialize alert engine
+        self.alert_engine = AlertEngine()
+
+        # Register alert callback to broadcast alerts via WebSocket
+        def alert_callback(alert):
+            self.socketio.emit('alert', alert.to_dict())
+
+        self.alert_engine.register_callback(alert_callback)
         
         if bpf_code_path:
             self.bpf_code_path = bpf_code_path
@@ -1339,6 +1351,12 @@ class RealtimeTracer:
             try:
                 summary = self.stats.get_summary()
                 self.socketio.emit('stats_update', summary)
+
+                # Check metrics against alert rules
+                try:
+                    self.alert_engine.check_metrics(summary)
+                except Exception as alert_error:
+                    print(f"[!] AlertEngine check error: {alert_error}")
             except Exception as e:
                 print(f"[!] Stats broadcast error: {e}")
     
@@ -1527,11 +1545,11 @@ def get_realtime_stats():
 def reset_realtime_stats():
     """Reset realtime statistics"""
     global tracer
-    
+
     try:
         if not tracer:
             return jsonify({'error': 'Tracer not initialized'}), 400
-        
+
         tracer.reset_stats()
         return jsonify({'status': 'reset'})
     except Exception as e:
@@ -2161,7 +2179,7 @@ class RealtimeExtension:
         """Reset statistics"""
         if self.tracer:
             self.tracer.reset_stats()
-    
+
     # ============= SESSION-SPECIFIC TRACKING =============
     
     def _setup_session_handlers(self):
@@ -2264,7 +2282,7 @@ class RealtimeExtension:
 
 def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
     """Add realtime API routes to Flask app (for backward compatibility)"""
-    
+
     @app.route('/api/realtime/enable', methods=['POST'])
     def enable_realtime_compat():
         try:
@@ -2274,7 +2292,7 @@ def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
                 return jsonify({'error': 'Failed to start realtime tracer'}), 500
         except Exception as e:
             return jsonify({'error': str(e)}), 500
-    
+
     @app.route('/api/realtime/disable', methods=['POST'])
     def disable_realtime_compat():
         try:
@@ -2282,7 +2300,7 @@ def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
             return jsonify({'status': 'disabled'})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
-    
+
     @app.route('/api/realtime/stats', methods=['GET'])
     def get_realtime_stats_compat():
         try:
@@ -2290,7 +2308,7 @@ def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
             return jsonify(stats)
         except Exception as e:
             return jsonify({'error': str(e)}), 500
-    
+
     @app.route('/api/realtime/reset', methods=['POST'])
     def reset_realtime_stats_compat():
         try:
@@ -2298,8 +2316,79 @@ def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
             return jsonify({'status': 'reset'})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
-    
+
+    # ============================================
+    # MONITORING & ALERTS API
+    # ============================================
+
+    @app.route('/api/monitoring/alerts', methods=['GET'])
+    def get_alerts():
+        """Get active alerts"""
+        try:
+            if not realtime or not realtime.tracer:
+                return jsonify([])
+
+            alerts = realtime.tracer.alert_engine.get_active_alerts()
+            return jsonify(alerts)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/monitoring/alerts/history', methods=['GET'])
+    def get_alerts_history():
+        """Get alert history"""
+        try:
+            if not realtime or not realtime.tracer:
+                return jsonify([])
+
+            limit = request.args.get('limit', 50, type=int)
+            history = realtime.tracer.alert_engine.get_alert_history(limit)
+            return jsonify(history)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/monitoring/alerts/rules', methods=['GET'])
+    def get_alert_rules():
+        """Get all alert rules"""
+        try:
+            if not realtime or not realtime.tracer:
+                return jsonify([])
+
+            rules = realtime.tracer.alert_engine.get_rules()
+            return jsonify(rules)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/monitoring/alerts/clear', methods=['POST'])
+    def clear_alerts():
+        """Clear all active alerts"""
+        try:
+            if not realtime or not realtime.tracer:
+                return jsonify({'error': 'Tracer not initialized'}), 400
+
+            realtime.tracer.alert_engine.clear_alerts()
+            return jsonify({'status': 'cleared'})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/monitoring/alerts/stats', methods=['GET'])
+    def get_alert_stats():
+        """Get alert engine statistics"""
+        try:
+            if not realtime or not realtime.tracer:
+                return jsonify({
+                    'total_rules': 0,
+                    'active_alerts': 0,
+                    'total_alerts_raised': 0,
+                    'rules_enabled': 0
+                })
+
+            stats = realtime.tracer.alert_engine.get_stats()
+            return jsonify(stats)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
     print("[✓] Realtime API routes registered: /api/realtime/{enable,disable,stats,reset}")
+    print("[✓] Monitoring API routes registered: /api/monitoring/alerts/*")
 
 # ============================================
 # MAIN

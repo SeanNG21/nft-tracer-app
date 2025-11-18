@@ -1,6 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
-// nft_tracer.bpf.c - BCC-compatible version
-
 #include <uapi/linux/ptrace.h>
 #include <linux/sched.h>
 
@@ -50,12 +47,10 @@ struct skb_info {
     u16 dst_port;
 };
 
-// BCC Macros for maps
 BPF_PERF_OUTPUT(events);
 BPF_HASH(skb_map, u64, struct skb_info, 10240);
 BPF_HASH(depth_map, u64, u8, 10240);
 
-// Helper functions
 static __always_inline u32 decode_verdict(s32 raw_ret, u32 raw_u32)
 {
     if (raw_ret < 0) {
@@ -180,9 +175,6 @@ static __always_inline void extract_packet_info(void *pkt, struct skb_info *info
     }
 }
 
-// ============================================
-// HOOK 1: nft_do_chain
-// ============================================
 int kprobe__nft_do_chain(struct pt_regs *ctx)
 {
     u64 tid = bpf_get_current_pid_tgid();
@@ -289,9 +281,6 @@ int kretprobe__nft_do_chain(struct pt_regs *ctx)
     return 0;
 }
 
-// ============================================
-// HOOK 2: nft_immediate_eval
-// ============================================
 int kprobe__nft_immediate_eval(struct pt_regs *ctx)
 {
     u64 tid = bpf_get_current_pid_tgid();
@@ -372,9 +361,6 @@ int kprobe__nft_immediate_eval(struct pt_regs *ctx)
     return 0;
 }
 
-// ============================================
-// HOOK 3: nf_hook_slow
-// ============================================
 int kretprobe__nf_hook_slow(struct pt_regs *ctx)
 {
     u64 tid = bpf_get_current_pid_tgid();
