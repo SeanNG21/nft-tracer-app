@@ -350,6 +350,21 @@ class NFTEvent:
         )
 
 @dataclass
+class UniversalEvent:
+    timestamp: int
+    cpu_id: int
+    pid: int
+    skb_addr: int
+    func_name: str
+    protocol: int
+    src_ip: int
+    dst_ip: int
+    src_port: int
+    dst_port: int
+    length: int
+    comm: str
+
+@dataclass
 class PacketTrace:
     skb_addr: int
     first_seen: int
@@ -454,6 +469,56 @@ class PacketTrace:
 
         if event.trace_type == 1:
             self.total_rules_evaluated += 1
+
+    def add_universal_event(self, event: UniversalEvent, hook: int = 255):
+        func_name = event.func_name
+
+        if func_name in FUNCTION_TO_LAYER:
+            base_layer = FUNCTION_TO_LAYER[func_name]
+            layer = refine_layer_by_hook(func_name, base_layer, hook)
+        else:
+            layer = "Unknown"
+
+        direction = detect_packet_direction(func_name, layer)
+
+        if self.direction is None:
+            self.direction = direction
+
+        dedup_key = (func_name, layer)
+        last_ts = self._func_last_seen.get(dedup_key, 0)
+        if event.timestamp - last_ts < 1000:
+            return
+        self._func_last_seen[dedup_key] = event.timestamp
+
+        event_dict = {
+            'timestamp': event.timestamp,
+            'trace_type': 'function_call',
+            'function': func_name,
+            'layer': layer,
+            'cpu_id': event.cpu_id,
+            'comm': event.comm
+        }
+        self.events.append(event_dict)
+        self.last_seen = event.timestamp
+
+        if func_name not in self.functions_called:
+            self.functions_called.append(func_name)
+            self.unique_functions += 1
+
+        self.pipeline_stages.append({
+            'timestamp': event.timestamp,
+            'function': func_name,
+            'layer': layer,
+            'direction': direction
+        })
+        self.layer_counts[layer] += 1
+
+        if event.protocol > 0 and self.protocol is None:
+            self.protocol = event.protocol
+            self.src_ip = self._format_ip(event.src_ip)
+            self.dst_ip = self._format_ip(event.dst_ip)
+            self.src_port = event.src_port if event.src_port > 0 else None
+            self.dst_port = event.dst_port if event.dst_port > 0 else None
 
     @staticmethod
     def _verdict_str(verdict: int) -> str:
