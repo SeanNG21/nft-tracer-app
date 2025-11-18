@@ -1540,159 +1540,6 @@ def reset_realtime_stats():
         return jsonify({'error': str(e)}), 500
 
 # ============================================
-# MONITORING & HISTORICAL DATA API
-# ============================================
-
-@app.route('/api/monitoring/history', methods=['GET'])
-def get_monitoring_history():
-    """
-    Get historical metrics from time-series database
-
-    Query parameters:
-        start_time: Start timestamp (unix seconds)
-        end_time: End timestamp (unix seconds)
-        granularity: 'raw', '1min', '5min', or 'auto'
-        hours: Alternative to start_time/end_time - get last N hours (default: 1)
-    """
-    global tracer
-
-    try:
-        if not tracer:
-            return jsonify({'error': 'Tracer not initialized', 'data': []}), 200
-
-        # Get query parameters
-        start_time = request.args.get('start_time', type=int)
-        end_time = request.args.get('end_time', type=int)
-        granularity = request.args.get('granularity', 'auto')
-        hours = request.args.get('hours', type=int)
-
-        # If hours is specified, calculate start_time
-        if hours and not start_time:
-            import time as time_module
-            end_time = int(time_module.time())
-            start_time = end_time - (hours * 3600)
-
-        # Get metrics from time-series database
-        metrics = tracer.timeseries_db.get_metrics(start_time, end_time, granularity)
-
-        return jsonify({
-            'success': True,
-            'data': metrics,
-            'count': len(metrics),
-            'granularity': granularity,
-            'start_time': start_time,
-            'end_time': end_time
-        })
-    except Exception as e:
-        return jsonify({'error': str(e), 'data': []}), 500
-
-@app.route('/api/monitoring/summary', methods=['GET'])
-def get_monitoring_summary():
-    """
-    Get summary statistics for a time period
-
-    Query parameters:
-        hours: Number of hours to look back (default: 1, max: 72)
-    """
-    global tracer
-
-    try:
-        if not tracer:
-            return jsonify({
-                'time_range_hours': 0,
-                'total_packets': 0,
-                'total_drops': 0,
-                'drop_rate': 0,
-                'avg_latency_us': 0,
-                'max_latency_us': 0
-            })
-
-        hours = request.args.get('hours', 1, type=int)
-        hours = min(hours, 72)  # Cap at 3 days
-
-        summary = tracer.timeseries_db.get_summary_stats(hours)
-
-        return jsonify(summary)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/monitoring/alerts', methods=['GET'])
-def get_alerts():
-    """Get active alerts"""
-    global tracer
-
-    try:
-        if not tracer:
-            return jsonify([])
-
-        alerts = tracer.alert_engine.get_active_alerts()
-        return jsonify(alerts)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/monitoring/alerts/history', methods=['GET'])
-def get_alerts_history():
-    """Get alert history"""
-    global tracer
-
-    try:
-        if not tracer:
-            return jsonify([])
-
-        limit = request.args.get('limit', 50, type=int)
-        history = tracer.alert_engine.get_alert_history(limit)
-        return jsonify(history)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/monitoring/alerts/rules', methods=['GET'])
-def get_alert_rules():
-    """Get all alert rules"""
-    global tracer
-
-    try:
-        if not tracer:
-            return jsonify([])
-
-        rules = tracer.alert_engine.get_rules()
-        return jsonify(rules)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/monitoring/alerts/clear', methods=['POST'])
-def clear_alerts():
-    """Clear all active alerts"""
-    global tracer
-
-    try:
-        if not tracer:
-            return jsonify({'error': 'Tracer not initialized'}), 400
-
-        tracer.alert_engine.clear_alerts()
-        return jsonify({'status': 'cleared'})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/monitoring/alerts/stats', methods=['GET'])
-def get_alert_stats():
-    """Get alert engine statistics"""
-    global tracer
-
-    try:
-        if not tracer:
-            return jsonify({
-                'total_rules': 0,
-                'active_alerts': 0,
-                'total_alerts_raised': 0,
-                'rules_enabled': 0
-            })
-
-        stats = tracer.alert_engine.get_stats()
-        return jsonify(stats)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-# ============================================
 # WEBSOCKET EVENTS
 # ============================================
 
@@ -2278,7 +2125,7 @@ class RealtimeExtension:
 
 def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
     """Add realtime API routes to Flask app (for backward compatibility)"""
-    
+
     @app.route('/api/realtime/enable', methods=['POST'])
     def enable_realtime_compat():
         try:
@@ -2288,7 +2135,7 @@ def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
                 return jsonify({'error': 'Failed to start realtime tracer'}), 500
         except Exception as e:
             return jsonify({'error': str(e)}), 500
-    
+
     @app.route('/api/realtime/disable', methods=['POST'])
     def disable_realtime_compat():
         try:
@@ -2296,7 +2143,7 @@ def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
             return jsonify({'status': 'disabled'})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
-    
+
     @app.route('/api/realtime/stats', methods=['GET'])
     def get_realtime_stats_compat():
         try:
@@ -2304,7 +2151,7 @@ def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
             return jsonify(stats)
         except Exception as e:
             return jsonify({'error': str(e)}), 500
-    
+
     @app.route('/api/realtime/reset', methods=['POST'])
     def reset_realtime_stats_compat():
         try:
@@ -2312,8 +2159,148 @@ def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
             return jsonify({'status': 'reset'})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
-    
+
+    # ============================================
+    # MONITORING & HISTORICAL DATA API
+    # ============================================
+
+    @app.route('/api/monitoring/history', methods=['GET'])
+    def get_monitoring_history():
+        """
+        Get historical metrics from time-series database
+
+        Query parameters:
+            start_time: Start timestamp (unix seconds)
+            end_time: End timestamp (unix seconds)
+            granularity: 'raw', '1min', '5min', or 'auto'
+            hours: Alternative to start_time/end_time - get last N hours (default: 1)
+        """
+        try:
+            if not realtime or not realtime.tracer:
+                return jsonify({'error': 'Tracer not initialized', 'data': []}), 200
+
+            # Get query parameters
+            start_time = request.args.get('start_time', type=int)
+            end_time = request.args.get('end_time', type=int)
+            granularity = request.args.get('granularity', 'auto')
+            hours = request.args.get('hours', type=int)
+
+            # If hours is specified, calculate start_time
+            if hours and not start_time:
+                import time as time_module
+                end_time = int(time_module.time())
+                start_time = end_time - (hours * 3600)
+
+            # Get metrics from time-series database
+            metrics = realtime.tracer.timeseries_db.get_metrics(start_time, end_time, granularity)
+
+            return jsonify({
+                'success': True,
+                'data': metrics,
+                'count': len(metrics),
+                'granularity': granularity,
+                'start_time': start_time,
+                'end_time': end_time
+            })
+        except Exception as e:
+            return jsonify({'error': str(e), 'data': []}), 500
+
+    @app.route('/api/monitoring/summary', methods=['GET'])
+    def get_monitoring_summary():
+        """
+        Get summary statistics for a time period
+
+        Query parameters:
+            hours: Number of hours to look back (default: 1, max: 72)
+        """
+        try:
+            if not realtime or not realtime.tracer:
+                return jsonify({
+                    'time_range_hours': 0,
+                    'total_packets': 0,
+                    'total_drops': 0,
+                    'drop_rate': 0,
+                    'avg_latency_us': 0,
+                    'max_latency_us': 0
+                })
+
+            hours = request.args.get('hours', 1, type=int)
+            hours = min(hours, 72)  # Cap at 3 days
+
+            summary = realtime.tracer.timeseries_db.get_summary_stats(hours)
+
+            return jsonify(summary)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/monitoring/alerts', methods=['GET'])
+    def get_alerts():
+        """Get active alerts"""
+        try:
+            if not realtime or not realtime.tracer:
+                return jsonify([])
+
+            alerts = realtime.tracer.alert_engine.get_active_alerts()
+            return jsonify(alerts)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/monitoring/alerts/history', methods=['GET'])
+    def get_alerts_history():
+        """Get alert history"""
+        try:
+            if not realtime or not realtime.tracer:
+                return jsonify([])
+
+            limit = request.args.get('limit', 50, type=int)
+            history = realtime.tracer.alert_engine.get_alert_history(limit)
+            return jsonify(history)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/monitoring/alerts/rules', methods=['GET'])
+    def get_alert_rules():
+        """Get all alert rules"""
+        try:
+            if not realtime or not realtime.tracer:
+                return jsonify([])
+
+            rules = realtime.tracer.alert_engine.get_rules()
+            return jsonify(rules)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/monitoring/alerts/clear', methods=['POST'])
+    def clear_alerts():
+        """Clear all active alerts"""
+        try:
+            if not realtime or not realtime.tracer:
+                return jsonify({'error': 'Tracer not initialized'}), 400
+
+            realtime.tracer.alert_engine.clear_alerts()
+            return jsonify({'status': 'cleared'})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/monitoring/alerts/stats', methods=['GET'])
+    def get_alert_stats():
+        """Get alert engine statistics"""
+        try:
+            if not realtime or not realtime.tracer:
+                return jsonify({
+                    'total_rules': 0,
+                    'active_alerts': 0,
+                    'total_alerts_raised': 0,
+                    'rules_enabled': 0
+                })
+
+            stats = realtime.tracer.alert_engine.get_stats()
+            return jsonify(stats)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
     print("[✓] Realtime API routes registered: /api/realtime/{enable,disable,stats,reset}")
+    print("[✓] Monitoring API routes registered: /api/monitoring/{history,summary,alerts}")
 
 # ============================================
 # MAIN
