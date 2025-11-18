@@ -591,6 +591,9 @@ class RealtimeStats:
         self.start_time = time.time()
         self._lock = threading.Lock()
 
+        # FINAL VERDICT TRACKING - Track latest verdict per packet for accurate counting
+        self.packet_final_verdicts: Dict[str, str] = {}  # skb_addr -> final_verdict_name
+
         # NEW: Pipeline stats for Inbound/Outbound visualization
         self.stats_by_direction_layer = {
             'Inbound': defaultdict(int),
@@ -801,6 +804,15 @@ class RealtimeStats:
                 error=(event.error_code > 0)
             )
 
+            # FINAL VERDICT TRACKING - Track latest verdict per packet
+            # This will be used for accurate total_verdicts counting (count unique packets by final verdict)
+            if verdict_to_count and event.skb_addr:
+                # Update latest verdict for this packet
+                # DROP verdicts are final, ACCEPT might be overridden by later DROP
+                current_verdict = self.packet_final_verdicts.get(event.skb_addr)
+                if current_verdict != 'DROP':  # Don't override DROP verdict
+                    self.packet_final_verdicts[event.skb_addr] = verdict_to_count
+
             # Track edges (transitions between nodes) and in-flight packets
             if event.skb_addr:
                 if event.skb_addr not in self.skb_paths:
@@ -889,7 +901,16 @@ class RealtimeStats:
                     oldest_keys = list(self.skb_tracking.keys())[:1000]
                     for key in oldest_keys:
                         del self.skb_tracking[key]
-            
+                        # Also cleanup final verdict tracking
+                        if key in self.packet_final_verdicts:
+                            del self.packet_final_verdicts[key]
+
+            # Cleanup packet_final_verdicts to prevent memory bloat
+            if len(self.packet_final_verdicts) > 10000:
+                oldest_keys = list(self.packet_final_verdicts.keys())[:2000]
+                for key in oldest_keys:
+                    del self.packet_final_verdicts[key]
+
             self.recent_events.append(asdict(event))
     
     def get_summary(self) -> Dict:
@@ -926,12 +947,11 @@ class RealtimeStats:
                     pipeline_dict['name'] = pipeline_name
                     pipelines_data.append(pipeline_dict)
 
-            # Calculate total verdict statistics across all netfilter nodes
+            # Calculate total verdict statistics from FINAL VERDICTS per packet
+            # Count unique packets by their final verdict (not all intermediate verdicts)
             total_verdicts = defaultdict(int)
-            for node_name, node_stats in self.nodes.items():
-                if 'Netfilter' in node_name and node_stats.verdict_breakdown:
-                    for verdict, count in node_stats.verdict_breakdown.items():
-                        total_verdicts[verdict] += count
+            for verdict in self.packet_final_verdicts.values():
+                total_verdicts[verdict] += 1
 
             # ENHANCED: Top Latency Contributors (for latency hotspot panel)
             latency_ranking = []
@@ -985,6 +1005,8 @@ class RealtimeStats:
             self.recent_events.clear()
             self.total_packets = 0
             self.start_time = time.time()
+            # Reset final verdict tracking
+            self.packet_final_verdicts.clear()
             # NEW: Reset pipeline stats
             self.stats_by_direction_layer = {
                 'Inbound': defaultdict(int),
