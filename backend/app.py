@@ -1945,23 +1945,35 @@ class SessionManager:
         self.lock = threading.Lock()
         self.realtime = realtime_ext
     
-    def create_session(self, session_id: str, mode: str = "nft", 
+    def create_session(self, session_id: str, mode: str = "nft",
                       pcap_filter: str = "", max_functions: int = 30) -> bool:
         with self.lock:
             if session_id in self.sessions:
                 return False
-            
+
             session = TraceSession(session_id, mode, pcap_filter, max_functions)
             if session.start():
                 self.sessions[session_id] = session
-                
+
+                # ENHANCED: Auto-enable global realtime for full mode
+                # Full mode sessions share global realtime backend for consistent visualization
+                if mode == 'full' and self.realtime:
+                    try:
+                        if not self.realtime.is_enabled():
+                            print(f"[SessionManager] Auto-enabling global realtime for full mode session: {session_id}")
+                            self.realtime.enable()
+                    except Exception as e:
+                        print(f"[Warning] Failed to enable global realtime: {e}")
+
                 # Start realtime tracking for this session
                 if self.realtime:
                     try:
+                        # For full mode: Just register session to receive global realtime broadcasts
+                        # For other modes: Use session-specific tracking (SessionStatsTracker)
                         self.realtime.start_session_tracking(session_id, mode)
                     except Exception as e:
                         print(f"[Warning] Failed to start realtime tracking: {e}")
-                
+
                 return True
             return False
     

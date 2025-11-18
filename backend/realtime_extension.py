@@ -2078,7 +2078,8 @@ class RealtimeExtension:
         self.tracer: Optional[RealtimeTracer] = None
         
         # Session-specific tracking
-        self.session_trackers = {}  # session_id -> SessionStatsTracker
+        self.session_trackers = {}  # session_id -> SessionStatsTracker (for non-full modes)
+        self.full_mode_sessions = set()  # session_ids using global realtime (full mode)
         self.session_lock = threading.Lock()
         self._session_stats_thread = None
         self._session_stats_running = False
@@ -2161,15 +2162,20 @@ class RealtimeExtension:
                 print(f"[WebSocket] Client left session room: session_{session_id}")
     
     def start_session_tracking(self, session_id: str, mode: str):
-        """Start tracking for a specific session"""
+        """Start tracking for a specific session
+
+        For full mode: Register session to receive global realtime broadcasts
+        For other modes: Create session-specific SessionStatsTracker
+        """
         print(f"[DEBUG] start_session_tracking called: session_id={session_id}, mode={mode}")
         with self.session_lock:
-            if session_id not in self.session_trackers:
-                tracker = SessionStatsTracker(session_id, mode)
-                self.session_trackers[session_id] = tracker
-                print(f"[Session] Started tracking for session: {session_id} (mode: {mode})")
-                print(f"[DEBUG] Active session trackers: {list(self.session_trackers.keys())}")
-                
+            if mode == 'full':
+                # Full mode: Use global realtime backend
+                # Just register session_id to receive broadcast
+                self.full_mode_sessions.add(session_id)
+                print(f"[Session] Registered FULL mode session for global realtime: {session_id}")
+                print(f"[DEBUG] Full mode sessions: {self.full_mode_sessions}")
+
                 # Start stats emission thread if not running
                 if not self._session_stats_running:
                     self._session_stats_running = True
@@ -2180,11 +2186,34 @@ class RealtimeExtension:
                     self._session_stats_thread.start()
                     print(f"[DEBUG] Stats emission thread started")
             else:
-                print(f"[DEBUG] Session {session_id} already exists in trackers")
+                # Other modes: Use session-specific tracking (NFT events, etc.)
+                if session_id not in self.session_trackers:
+                    tracker = SessionStatsTracker(session_id, mode)
+                    self.session_trackers[session_id] = tracker
+                    print(f"[Session] Started tracking for session: {session_id} (mode: {mode})")
+                    print(f"[DEBUG] Active session trackers: {list(self.session_trackers.keys())}")
+
+                    # Start stats emission thread if not running
+                    if not self._session_stats_running:
+                        self._session_stats_running = True
+                        self._session_stats_thread = threading.Thread(
+                            target=self._emit_session_stats_loop,
+                            daemon=True
+                        )
+                        self._session_stats_thread.start()
+                        print(f"[DEBUG] Stats emission thread started")
+                else:
+                    print(f"[DEBUG] Session {session_id} already exists in trackers")
     
     def stop_session_tracking(self, session_id: str):
         """Stop tracking for a specific session"""
         with self.session_lock:
+            # Remove from full mode sessions if exists
+            if session_id in self.full_mode_sessions:
+                self.full_mode_sessions.remove(session_id)
+                print(f"[Session] Unregistered FULL mode session: {session_id}")
+
+            # Remove session-specific tracker if exists
             if session_id in self.session_trackers:
                 del self.session_trackers[session_id]
                 print(f"[Session] Stopped tracking for session: {session_id}")
@@ -2203,7 +2232,12 @@ class RealtimeExtension:
                     self._session_not_found_logged.add(session_id)
     
     def _emit_session_stats_loop(self):
-        """Background thread to emit session stats every 1 second for optimal readability"""
+        """Background thread to emit session stats every 1 second for optimal readability
+
+        Two types of sessions:
+        1. Full mode sessions: Receive global realtime stats (shared backend)
+        2. Other mode sessions: Receive session-specific stats (SessionStatsTracker)
+        """
         print(f"[DEBUG] _emit_session_stats_loop started (1s interval)")
         iteration = 0
         while self._session_stats_running:
@@ -2212,14 +2246,34 @@ class RealtimeExtension:
 
             with self.session_lock:
                 if iteration <= 3:  # Debug first 3 iterations (3 seconds worth at 1s)
-                    print(f"[DEBUG] Emit iteration #{iteration}, active sessions: {list(self.session_trackers.keys())}")
+                    print(f"[DEBUG] Emit iteration #{iteration}, full_mode_sessions: {self.full_mode_sessions}, other_sessions: {list(self.session_trackers.keys())}")
 
+                # 1. Emit global realtime stats to FULL mode sessions
+                if self.full_mode_sessions and self.tracer and self.tracer.running:
+                    try:
+                        global_stats = self.tracer.stats.get_summary()
+
+                        if iteration <= 3:
+                            print(f"[DEBUG] Emitting GLOBAL stats to full mode sessions: total_packets={global_stats.get('total_packets', 0)}")
+
+                        # Emit to each full mode session room
+                        for session_id in list(self.full_mode_sessions):
+                            self.socketio.emit('session_stats_update', {
+                                'session_id': session_id,
+                                'stats': global_stats
+                            }, room=f"session_{session_id}")
+                    except Exception as e:
+                        print(f"[Error] Failed to emit global stats to full mode sessions: {e}")
+                        import traceback
+                        traceback.print_exc()
+
+                # 2. Emit session-specific stats to OTHER mode sessions
                 for session_id, tracker in list(self.session_trackers.items()):
                     try:
                         stats = tracker.get_stats()
 
                         if iteration <= 3:  # Debug first 3 iterations (3s at 1s)
-                            print(f"[DEBUG] Emitting stats for {session_id}: total_events={stats['total_events']}, total_packets={stats['total_packets']}")
+                            print(f"[DEBUG] Emitting session-specific stats for {session_id}: total_events={stats['total_events']}, total_packets={stats['total_packets']}")
 
                         # Emit to session-specific room
                         self.socketio.emit('session_stats_update', {
