@@ -333,9 +333,20 @@ function SessionRealtimeStats({ sessionId }) {
                 ? ((pipelineData.completed / pipelineData.started) * 100).toFixed(1)
                 : 0;
 
+              // Use calculated_in_flight from backend (sum of node in-flight packets)
+              const inProgress = pipelineData.calculated_in_flight !== undefined
+                ? pipelineData.calculated_in_flight
+                : pipelineData.in_progress;
+
+              // Show consistency warning if mismatch detected
+              const hasConsistencyIssue = pipelineData.debug_info?.consistency_check === 'MISMATCH';
+
               return (
-                <div key={pipelineName} className="pipeline-stat-card">
-                  <div className="pipeline-stat-header">{pipelineName}</div>
+                <div key={pipelineName} className={`pipeline-stat-card ${hasConsistencyIssue ? 'warning-border' : ''}`}>
+                  <div className="pipeline-stat-header">
+                    {pipelineName}
+                    {hasConsistencyIssue && <span className="consistency-warning" title="Consistency check failed">⚠️</span>}
+                  </div>
                   <div className="pipeline-stat-row">
                     <span className="pipeline-stat-label">Started:</span>
                     <span className="pipeline-stat-value success">{pipelineData.started.toLocaleString()}</span>
@@ -346,12 +357,29 @@ function SessionRealtimeStats({ sessionId }) {
                   </div>
                   <div className="pipeline-stat-row">
                     <span className="pipeline-stat-label">In Progress:</span>
-                    <span className="pipeline-stat-value warning">{pipelineData.in_progress.toLocaleString()}</span>
+                    <span className="pipeline-stat-value warning">
+                      {inProgress.toLocaleString()}
+                      {hasConsistencyIssue && (
+                        <span className="debug-hint" title={`Expected: ${pipelineData.in_progress}, Actual from nodes: ${inProgress}`}>
+                          {' '}(!)
+                        </span>
+                      )}
+                    </span>
                   </div>
                   <div className="pipeline-stat-row">
                     <span className="pipeline-stat-label">Completion Rate:</span>
                     <span className="pipeline-stat-value info">{completionRate}%</span>
                   </div>
+
+                  {/* Optional: Show debug info in development */}
+                  {hasConsistencyIssue && pipelineData.debug_info && (
+                    <div className="pipeline-debug-info">
+                      <small>
+                        SKB set: {pipelineData.debug_info.in_progress_skb_count} |
+                        Node sum: {inProgress}
+                      </small>
+                    </div>
+                  )}
                 </div>
               );
             })}

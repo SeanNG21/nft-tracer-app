@@ -1588,6 +1588,45 @@
   background: rgba(0, 188, 212, 0.15);
 }
 
+/* Consistency check warnings */
+.pipeline-stat-card.warning-border {
+  border-color: #ffc107 !important;
+  box-shadow: 0 4px 12px rgba(255, 193, 7, 0.4);
+}
+
+.consistency-warning {
+  margin-left: 8px;
+  font-size: 1rem;
+  color: #ffc107;
+  animation: warning-pulse 2s ease-in-out infinite;
+}
+
+@keyframes warning-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.1);
+  }
+}
+
+.debug-hint {
+  font-size: 0.85rem;
+  color: #ff9800;
+  cursor: help;
+}
+
+.pipeline-debug-info {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 193, 7, 0.3);
+  color: #ffeb3b;
+  text-align: center;
+  font-family: monospace;
+}
+
 /* ========================================
    ENHANCED: Verdict Statistics Panel
    ======================================== */
