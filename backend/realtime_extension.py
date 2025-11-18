@@ -1518,12 +1518,13 @@ class SessionStatsTracker:
             layer_stats['packets_in'] += 1
 
             # Track verdict with smart deduplication
-            # Prioritize rule_eval (trace_type=1), but also count chain_exit (trace_type=0)
+            # Prioritize rule_eval (trace_type=1), but also count chain_exit (trace_type=0) and hook_exit (trace_type=2)
             # to ensure we capture DROP/ACCEPT verdicts even if rule_eval is not logged
             # Deduplicate by tracking unique (skb_addr, hook_num) pairs
             # CRITICAL: Use hook_num not layer_name - each hook can have different verdicts
+            # trace_type: 0=chain_exit (nft), 1=rule_eval (nft), 2=hook_exit (nf_hook_slow return)
             should_track_verdict = verdict_name != 'UNKNOWN' and (
-                (func_name == 'nft_do_chain' and trace_type in [0, 1]) or  # NFT: rule_eval or chain_exit
+                (func_name == 'nft_do_chain' and trace_type in [0, 1, 2]) or  # NFT + NF_HOOK: all trace types
                 (func_name != 'nft_do_chain')  # Non-NFT: all verdicts
             )
 
@@ -1534,27 +1535,33 @@ class SessionStatsTracker:
 
                 # Check if already tracked for this SKB+hook
                 if dedup_key in self.skb_verdict_tracked:
-                    # Already tracked - check priority (rule_eval > chain_exit)
-                    if trace_type == 1:  # rule_eval
+                    # Already tracked - check priority (rule_eval > chain_exit > hook_exit)
+                    if trace_type == 1:  # rule_eval (highest priority)
                         # Update to rule_eval verdict (higher priority)
                         old_verdict = self.skb_verdict_tracked[dedup_key]
                         if old_verdict != verdict_name:
-                            # Replace chain_exit verdict with rule_eval verdict
+                            # Replace chain_exit/hook_exit verdict with rule_eval verdict
                             layer_stats['verdict_breakdown'][old_verdict] -= 1
                             layer_stats['verdict_breakdown'][verdict_name] += 1
                             self.skb_verdict_tracked[dedup_key] = verdict_name
                             print(f"[SessionStats {self.session_id}] UPDATED verdict for SKB {skb_addr} at hook {hook_num} ({hook_name}): {old_verdict} → {verdict_name} (rule_eval priority)")
                         else:
                             print(f"[SessionStats {self.session_id}] SKIPPED duplicate verdict for SKB {skb_addr} at hook {hook_num} ({hook_name}): {verdict_name}")
-                    else:  # chain_exit
-                        # Already tracked - skip this chain_exit
+                    elif trace_type == 0:  # chain_exit (medium priority)
+                        # Update if current is hook_exit, skip if already have chain_exit or rule_eval
                         print(f"[SessionStats {self.session_id}] SKIPPED chain_exit verdict for SKB {skb_addr} at hook {hook_num} ({hook_name}): {verdict_name} (already tracked)")
+                        should_track_verdict = False
+                    else:  # trace_type == 2, hook_exit (lowest priority)
+                        # Already tracked - skip this hook_exit
+                        print(f"[SessionStats {self.session_id}] SKIPPED hook_exit verdict for SKB {skb_addr} at hook {hook_num} ({hook_name}): {verdict_name} (already tracked)")
                         should_track_verdict = False
                 else:
                     # First time seeing this SKB+hook - track it
                     layer_stats['verdict_breakdown'][verdict_name] += 1
                     self.skb_verdict_tracked[dedup_key] = verdict_name
-                    print(f"[SessionStats {self.session_id}] VERDICT TRACKED to hook {hook_num} ({hook_name}) layer '{layer_name}': verdict={verdict_name}, trace_type={trace_type}, skb={skb_addr}, current={dict(layer_stats['verdict_breakdown'])}")
+                    trace_type_names = {0: 'chain_exit', 1: 'rule_eval', 2: 'hook_exit'}
+                    trace_type_name = trace_type_names.get(trace_type, 'unknown')
+                    print(f"[SessionStats {self.session_id}] VERDICT TRACKED to hook {hook_num} ({hook_name}) layer '{layer_name}': verdict={verdict_name}, trace_type={trace_type} ({trace_type_name}), skb={skb_addr}, current={dict(layer_stats['verdict_breakdown'])}")
             elif should_track_verdict:
                 # Non-NFT events - track directly
                 layer_stats['verdict_breakdown'][verdict_name] += 1
