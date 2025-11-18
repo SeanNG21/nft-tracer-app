@@ -318,7 +318,11 @@ class NodeStats:
 
     def add_event(self, skb_addr: str, latency_us: float = 0, function: str = None,
                   verdict: str = None, error: bool = False):
-        """Add an event to this node's statistics"""
+        """Add an event to this node's statistics
+
+        Note: Verdict should only be passed if trace_type == "chain_exit"
+        to avoid double-counting. Caller is responsible for filtering.
+        """
         self.count += 1
         # Only track unique SKBs if skb_addr is valid (not empty/None)
         if skb_addr and skb_addr != '':
@@ -327,14 +331,13 @@ class NodeStats:
             self.latencies_us.append(latency_us)
         if function:
             self.function_calls[function] += 1
-        # CRITICAL: Only count verdict from nft_immediate_eval
-        # This is the actual function that executes verdict actions per-rule
-        # Other functions (nft_do_chain, nf_hook_slow) just return overall verdict
-        # No deduplication needed - each rule only executes once per packet
-        if verdict and function == 'nft_immediate_eval':
+
+        # Count verdict if provided (caller must filter by trace_type == "chain_exit")
+        if verdict and verdict != 'UNKNOWN':
             self.verdict_breakdown[verdict] += 1
             if verdict == 'DROP':
                 self.drop_count += 1
+
         if error:
             self.error_count += 1
 
@@ -766,12 +769,35 @@ class RealtimeStats:
                 first_ts = self.skb_tracking[event.skb_addr]['first_ts']
                 latency_us = (event.timestamp - first_ts) * 1_000_000  # convert to microseconds
 
-            # Add event to node
+            # VERDICT FILTERING LOGIC - Only count verdicts from netfilter functions with deduplication
+            # Global realtime traces kernel functions (not NFT events), so we use function-based filtering
+            verdict_to_count = None
+            if event.verdict_name and event.verdict_name != 'UNKNOWN':
+                # Check if this is a netfilter function
+                is_netfilter = any(kw in (event.function or '').lower() for kw in ['nf_', 'nft_', 'netfilter'])
+                if is_netfilter and event.skb_addr:
+                    # Initialize counted_verdicts set for this node if not exists
+                    if not hasattr(node, 'counted_verdicts'):
+                        node.counted_verdicts = set()
+
+                    # Deduplicate by (skb_addr, verdict) - count each verdict once per packet
+                    verdict_key = (event.skb_addr, event.verdict_name)
+                    if verdict_key not in node.counted_verdicts:
+                        verdict_to_count = event.verdict_name
+                        node.counted_verdicts.add(verdict_key)
+
+                        # Cleanup to prevent memory bloat
+                        if len(node.counted_verdicts) > 10000:
+                            old_entries = list(node.counted_verdicts)[:2000]
+                            for entry in old_entries:
+                                node.counted_verdicts.discard(entry)
+
+            # Add event to node (only pass filtered verdict)
             node.add_event(
                 skb_addr=event.skb_addr or '',
                 latency_us=latency_us,
                 function=event.function,
-                verdict=event.verdict_name,
+                verdict=verdict_to_count,
                 error=(event.error_code > 0)
             )
 
@@ -1590,9 +1616,29 @@ class SessionStatsTracker:
         self.nodes: Dict[str, NodeStats] = {}  # node_name -> NodeStats
         self.skb_tracking: Dict[str, Dict] = {}  # skb_addr -> {'first_ts': float, 'last_node': str}
         self.skb_paths: Dict[str, List[str]] = {}  # skb_addr -> [node1, node2, ...]
+        self.edges: Dict[tuple, EdgeStats] = {}  # (from, to) -> EdgeStats
         self.stats_by_direction_layer = {
             'Inbound': defaultdict(int),
             'Outbound': defaultdict(int)
+        }
+
+        # ENHANCED: Pipeline completion tracking with node definitions
+        self.pipeline_order = ['Inbound', 'Outbound', 'Local Delivery', 'Forward']
+        self.pipelines: Dict[str, PipelineStats] = {
+            'Inbound': PipelineStats(active_nodes={
+                'NIC', 'Driver (NAPI)', 'GRO', 'TC Ingress',
+                'Netfilter PREROUTING', 'Conntrack', 'NAT PREROUTING', 'Routing Decision'
+            }),
+            'Outbound': PipelineStats(active_nodes={
+                'Application', 'TCP/UDP Output', 'Netfilter OUTPUT',
+                'Routing Lookup', 'NAT POSTROUTING', 'TC Egress', 'Driver TX'
+            }),
+            'Local Delivery': PipelineStats(active_nodes={
+                'Netfilter INPUT', 'TCP/UDP', 'Socket'
+            }),
+            'Forward': PipelineStats(active_nodes={
+                'Netfilter FORWARD', 'Netfilter POSTROUTING', 'NIC TX'
+            })
         }
 
         # Multifunction-specific stats
@@ -1611,7 +1657,29 @@ class SessionStatsTracker:
         if node_name not in self.nodes:
             self.nodes[node_name] = NodeStats()
         return self.nodes[node_name]
-    
+
+    def add_edge(self, from_node: str, to_node: str):
+        """Track an edge (transition) between two nodes"""
+        edge_key = (from_node, to_node)
+        if edge_key not in self.edges:
+            self.edges[edge_key] = EdgeStats(from_node=from_node, to_node=to_node)
+        self.edges[edge_key].count += 1
+
+    def _track_pipeline_membership(self, skb_addr: str, node_name: str):
+        """
+        Track which pipelines this SKB has entered.
+
+        Rules:
+        - started: Count of unique SKBs that entered ANY node of this pipeline
+        - in_flight: Real-time count from nodes (calculated from node.in_flight_packets)
+        - completed: started - in_flight (packets that left the pipeline)
+        """
+        # Check which pipelines this node belongs to
+        for pipeline_name, pipeline_stats in self.pipelines.items():
+            if node_name in pipeline_stats.active_nodes:
+                # Add this SKB to the pipeline's unique set
+                pipeline_stats.unique_skbs.add(skb_addr)
+
     def process_event(self, event: Dict):
         """Process a single event"""
         with self.lock:
@@ -1633,6 +1701,8 @@ class SessionStatsTracker:
             protocol = event.get('protocol', 0)
             src_ip = event.get('src_ip', '0.0.0.0')
             dst_ip = event.get('dst_ip', '0.0.0.0')
+            trace_type = event.get('trace_type', None)  # NEW: Get trace_type (chain_exit, rule_eval, hook_exit)
+            skb_addr = event.get('skb_addr', '')  # NEW: Get skb_addr for tracking
 
             # Determine layer
             if is_multifunction and 'layer' in event:
@@ -1662,9 +1732,50 @@ class SessionStatsTracker:
             layer_stats = hook_stats['layers'][layer_name]
             layer_stats['packets_in'] += 1
 
-            # Track verdict - ONLY from nft_immediate_eval (same logic as NodeStats)
-            if verdict_name and func_name == 'nft_immediate_eval':
-                layer_stats['verdict_breakdown'][verdict_name] += 1
+            # DEBUG: Log verdict info for first few events
+            if self.total_events <= 10 and verdict != 255:
+                print(f"[SessionStats {self.session_id}] Verdict event #{self.total_events}: "
+                      f"func={func_name}, verdict={verdict_name} ({verdict}), hook={hook_name}, trace_type={trace_type}")
+
+            # VERDICT COUNTING LOGIC - Support both NFT events and function trace events:
+            # 1. If trace_type exists (NFT events): ONLY count from "chain_exit" events
+            # 2. If no trace_type (function trace events from global realtime): Count from netfilter functions with deduplication
+            if verdict != 255 and verdict_name != 'UNKNOWN':
+                should_count = False
+
+                if trace_type:
+                    # Case 1: NFT events with trace_type (session events from nft_tracer.bpf.c)
+                    # ONLY count chain_exit to avoid double-counting from rule_eval/hook_exit
+                    if trace_type == 'chain_exit':
+                        should_count = True
+                        if self.total_events <= 10:
+                            print(f"[SessionStats {self.session_id}] ✓ Verdict counted: {verdict_name} (trace_type=chain_exit)")
+                else:
+                    # Case 2: Function trace events without trace_type (global realtime from full_tracer.bpf.c)
+                    # Count from netfilter functions with per-packet deduplication
+                    is_netfilter = any(kw in func_name.lower() for kw in ['nf_', 'nft_', 'netfilter']) if func_name else False
+                    if is_netfilter:
+                        # Initialize counted_verdicts set if not exists
+                        if 'counted_verdicts' not in layer_stats:
+                            layer_stats['counted_verdicts'] = set()
+
+                        # Deduplicate by (skb_addr, verdict) - count each verdict once per packet
+                        verdict_key = (skb_addr, verdict_name)
+                        if verdict_key not in layer_stats['counted_verdicts']:
+                            should_count = True
+                            layer_stats['counted_verdicts'].add(verdict_key)
+
+                            # Cleanup to prevent memory bloat
+                            if len(layer_stats['counted_verdicts']) > 10000:
+                                old_entries = list(layer_stats['counted_verdicts'])[:2000]
+                                for entry in old_entries:
+                                    layer_stats['counted_verdicts'].discard(entry)
+
+                            if self.total_events <= 10:
+                                print(f"[SessionStats {self.session_id}] ✓ Verdict counted: {verdict_name} from {func_name} (no trace_type, deduplicated)")
+
+                if should_count:
+                    layer_stats['verdict_breakdown'][verdict_name] += 1
 
             # Track function
             if func_name:
@@ -1731,13 +1842,49 @@ class SessionStatsTracker:
                             del self.skb_tracking[key]
 
                 # Add event to node
+                # CRITICAL: Only pass verdict if trace_type == "chain_exit"
+                # This prevents double-counting verdicts from rule_eval and hook_exit events
+                verdict_to_count = verdict_name if trace_type == 'chain_exit' else None
+
                 node.add_event(
                     skb_addr=skb_addr,
                     latency_us=latency_us,
                     function=func_name,
-                    verdict=verdict_name,
+                    verdict=verdict_to_count,
                     error=(event.get('error_code', 0) > 0)
                 )
+
+                # Track edges (transitions between nodes) and in-flight packets
+                if skb_addr:
+                    if skb_addr not in self.skb_paths:
+                        self.skb_paths[skb_addr] = []
+
+                    # If there's a previous node, create an edge and update in-flight tracking
+                    if self.skb_paths[skb_addr]:
+                        prev_node = self.skb_paths[skb_addr][-1]
+                        if prev_node != pipeline_layer:  # Avoid self-loops
+                            self.add_edge(prev_node, pipeline_layer)
+                            # Remove from previous node's in-flight set
+                            prev_node_stats = self.get_node(prev_node)
+                            prev_node_stats.in_flight_packets.discard(skb_addr)
+
+                    # Add packet to current node's in-flight set
+                    node.in_flight_packets.add(skb_addr)
+
+                    # Add current node to path
+                    self.skb_paths[skb_addr].append(pipeline_layer)
+
+                    # ENHANCED: Track pipeline membership (which pipelines this SKB has entered)
+                    self._track_pipeline_membership(skb_addr, pipeline_layer)
+
+                    # Limit path history and cleanup old SKB tracking
+                    if len(self.skb_paths) > 10000:
+                        oldest_keys = list(self.skb_paths.keys())[:1000]
+                        for key in oldest_keys:
+                            # Cleanup in-flight packets for stale SKBs
+                            for node_stats in self.nodes.values():
+                                node_stats.in_flight_packets.discard(key)
+                            del self.skb_paths[key]
 
             # Update total packets (count unique packets, not events)
             self.total_packets = max(self.total_packets, sum(h['packets_total'] for h in self.hooks.values()) // max(len(self.hooks), 1))
@@ -1906,10 +2053,60 @@ class SessionStatsTracker:
 
             # ENHANCED: Add nodes data for full mode (for enhanced pipeline visualization)
             if self.mode == 'full':
+                current_ts = time.time()
+
+                # Serialize nodes with packet rate calculation
                 nodes_data = {}
                 for node_name, node_stats in self.nodes.items():
-                    nodes_data[node_name] = node_stats.to_dict()
+                    nodes_data[node_name] = node_stats.to_dict(current_ts)
                 stats['nodes'] = nodes_data
+
+                # Serialize edges
+                edges_data = []
+                for edge_stats in self.edges.values():
+                    edges_data.append(edge_stats.to_dict())
+                stats['edges'] = edges_data
+
+                # Pipeline statistics (ORDERED for consistent display)
+                pipelines_data = []
+                for pipeline_name in self.pipeline_order:
+                    if pipeline_name in self.pipelines:
+                        pipeline_stats = self.pipelines[pipeline_name]
+                        pipeline_dict = pipeline_stats.to_dict(self.nodes)
+                        pipeline_dict['name'] = pipeline_name
+                        pipelines_data.append(pipeline_dict)
+                stats['pipelines'] = pipelines_data
+
+                # Calculate total verdict statistics across all netfilter nodes
+                total_verdicts = defaultdict(int)
+                for node_name, node_stats in self.nodes.items():
+                    if 'Netfilter' in node_name and node_stats.verdict_breakdown:
+                        for verdict, count in node_stats.verdict_breakdown.items():
+                            total_verdicts[verdict] += count
+                stats['total_verdicts'] = dict(total_verdicts)
+
+                # Top Latency Contributors (for latency hotspot panel)
+                latency_ranking = []
+                total_latency = 0
+                for node_name, node_stats in self.nodes.items():
+                    if node_stats.latencies_us:
+                        import numpy as np
+                        avg_latency = float(np.mean(node_stats.latencies_us))
+                        latency_ranking.append({
+                            'node': node_name,
+                            'avg_latency_us': round(avg_latency, 1),
+                            'count': len(node_stats.latencies_us)
+                        })
+                        total_latency += avg_latency
+
+                # Sort by latency descending and calculate percentage
+                latency_ranking.sort(key=lambda x: x['avg_latency_us'], reverse=True)
+                for item in latency_ranking[:10]:  # Top 10
+                    if total_latency > 0:
+                        item['percentage'] = round((item['avg_latency_us'] / total_latency) * 100, 1)
+                    else:
+                        item['percentage'] = 0
+                stats['top_latency'] = latency_ranking[:10]
 
             return stats
 
@@ -1922,7 +2119,7 @@ class RealtimeExtension:
         self.tracer: Optional[RealtimeTracer] = None
         
         # Session-specific tracking
-        self.session_trackers = {}  # session_id -> SessionStatsTracker
+        self.session_trackers = {}  # session_id -> SessionStatsTracker (for all modes)
         self.session_lock = threading.Lock()
         self._session_stats_thread = None
         self._session_stats_running = False
@@ -2005,7 +2202,10 @@ class RealtimeExtension:
                 print(f"[WebSocket] Client left session room: session_{session_id}")
     
     def start_session_tracking(self, session_id: str, mode: str):
-        """Start tracking for a specific session"""
+        """Start tracking for a specific session using SessionStatsTracker
+
+        All modes (including 'full') use their own SessionStatsTracker backend.
+        """
         print(f"[DEBUG] start_session_tracking called: session_id={session_id}, mode={mode}")
         with self.session_lock:
             if session_id not in self.session_trackers:
@@ -2013,7 +2213,7 @@ class RealtimeExtension:
                 self.session_trackers[session_id] = tracker
                 print(f"[Session] Started tracking for session: {session_id} (mode: {mode})")
                 print(f"[DEBUG] Active session trackers: {list(self.session_trackers.keys())}")
-                
+
                 # Start stats emission thread if not running
                 if not self._session_stats_running:
                     self._session_stats_running = True
@@ -2047,7 +2247,10 @@ class RealtimeExtension:
                     self._session_not_found_logged.add(session_id)
     
     def _emit_session_stats_loop(self):
-        """Background thread to emit session stats every 1 second for optimal readability"""
+        """Background thread to emit session stats every 1 second for optimal readability
+
+        All sessions use their own SessionStatsTracker backend.
+        """
         print(f"[DEBUG] _emit_session_stats_loop started (1s interval)")
         iteration = 0
         while self._session_stats_running:
@@ -2056,14 +2259,15 @@ class RealtimeExtension:
 
             with self.session_lock:
                 if iteration <= 3:  # Debug first 3 iterations (3 seconds worth at 1s)
-                    print(f"[DEBUG] Emit iteration #{iteration}, active sessions: {list(self.session_trackers.keys())}")
+                    print(f"[DEBUG] Emit iteration #{iteration}, active_sessions: {list(self.session_trackers.keys())}")
 
+                # Emit session-specific stats to all sessions
                 for session_id, tracker in list(self.session_trackers.items()):
                     try:
                         stats = tracker.get_stats()
 
                         if iteration <= 3:  # Debug first 3 iterations (3s at 1s)
-                            print(f"[DEBUG] Emitting stats for {session_id}: total_events={stats['total_events']}, total_packets={stats['total_packets']}")
+                            print(f"[DEBUG] Emitting session stats for {session_id}: total_events={stats['total_events']}, total_packets={stats['total_packets']}")
 
                         # Emit to session-specific room
                         self.socketio.emit('session_stats_update', {

@@ -146,6 +146,15 @@ export const AuthProvider = ({ children }) => {
     }
   }, []);
 
+  const refetchUser = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API_BASE}/auth/me`);
+      setUser(response.data.user);
+    } catch (err) {
+      console.error('Failed to refetch user:', err);
+    }
+  }, []);
+
   const value = {
     user,
     accessToken,
@@ -155,6 +164,7 @@ export const AuthProvider = ({ children }) => {
     login,
     logout,
     refreshAccessToken,
+    refetchUser,
     isAuthenticated: !!user && !!accessToken,
   };
 

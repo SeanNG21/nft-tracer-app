@@ -703,24 +703,31 @@ function App() {
 }
 
 function DashboardWithLogout() {
-  const { user, logout } = useAuth();
+  const { user, logout, refetchUser } = useAuth();
   const navigate = useNavigate();
+
+  // Refetch user data when component mounts to ensure fresh state
+  useEffect(() => {
+    refetchUser();
+  }, [refetchUser]);
 
   // Redirect to change password if first login
   useEffect(() => {
-    if (user?.first_login) {
+    if (user && user.first_login === true) {
       navigate('/change-password');
     }
   }, [user, navigate]);
 
   return (
     <div style={{ position: 'relative' }}>
-      <div style={{
-        position: 'absolute',
-        top: '20px',
-        right: '20px',
-        zIndex: 1000
-      }}>
+      <div
+        style={{
+          position: 'fixed',
+          bottom: '20px',
+          right: '20px',
+          zIndex: 1000,
+        }}
+      >
         <button
           onClick={logout}
           style={{
@@ -730,15 +737,17 @@ function DashboardWithLogout() {
             border: 'none',
             borderRadius: '4px',
             cursor: 'pointer',
-            fontSize: '14px'
+            fontSize: '14px',
           }}
         >
           Logout
         </button>
       </div>
+
       <Dashboard />
     </div>
   );
 }
+
 
 export default App;
