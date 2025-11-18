@@ -326,13 +326,21 @@ class NodeStats:
             self.latencies_us.append(latency_us)
         if function:
             self.function_calls[function] += 1
-        # CRITICAL FIX: Only count verdict once per SKB to prevent duplicates
+        # CRITICAL FIX: Deduplicate verdict counting for packets with valid SKB address
         # Same packet can trigger multiple events (nft_do_chain, nft_immediate_eval, nf_hook_slow)
-        # but verdict should only be counted once
-        if verdict and skb_addr and skb_addr != '':
-            if skb_addr not in self.verdict_counted_skbs[verdict]:
+        # but verdict should only be counted once per SKB
+        if verdict:
+            # If we have a valid SKB address, use deduplication
+            if skb_addr and skb_addr != '':
+                if skb_addr not in self.verdict_counted_skbs[verdict]:
+                    self.verdict_breakdown[verdict] += 1
+                    self.verdict_counted_skbs[verdict].add(skb_addr)
+                    if verdict == 'DROP':
+                        self.drop_count += 1
+            else:
+                # No SKB address - count normally (for events without skb tracking)
+                # This handles edge cases where verdict is present but skb_addr is missing
                 self.verdict_breakdown[verdict] += 1
-                self.verdict_counted_skbs[verdict].add(skb_addr)
                 if verdict == 'DROP':
                     self.drop_count += 1
         if error:
