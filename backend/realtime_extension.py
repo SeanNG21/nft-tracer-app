@@ -302,6 +302,8 @@ class NodeStats:
     latencies_us: List[float] = field(default_factory=list)  # microseconds
     function_calls: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
     verdict_breakdown: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    # NEW: Track which SKBs have had verdict counted to prevent duplicates
+    verdict_counted_skbs: Dict[str, set] = field(default_factory=lambda: defaultdict(set))
     error_count: int = 0
     drop_count: int = 0
     truncated_count: int = 0
@@ -324,10 +326,15 @@ class NodeStats:
             self.latencies_us.append(latency_us)
         if function:
             self.function_calls[function] += 1
-        if verdict:
-            self.verdict_breakdown[verdict] += 1
-            if verdict == 'DROP':
-                self.drop_count += 1
+        # CRITICAL FIX: Only count verdict once per SKB to prevent duplicates
+        # Same packet can trigger multiple events (nft_do_chain, nft_immediate_eval, nf_hook_slow)
+        # but verdict should only be counted once
+        if verdict and skb_addr and skb_addr != '':
+            if skb_addr not in self.verdict_counted_skbs[verdict]:
+                self.verdict_breakdown[verdict] += 1
+                self.verdict_counted_skbs[verdict].add(skb_addr)
+                if verdict == 'DROP':
+                    self.drop_count += 1
         if error:
             self.error_count += 1
 
