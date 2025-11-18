@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 import './Auth.css';
 
@@ -46,7 +46,7 @@ const Login = () => {
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="Enter your username"
+              placeholder="Default: root"
               disabled={loading}
               required
             />
@@ -59,7 +59,7 @@ const Login = () => {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Enter your password"
+              placeholder="Default: root"
               disabled={loading}
               required
             />
@@ -74,13 +74,8 @@ const Login = () => {
           </button>
         </form>
 
-        <div className="auth-footer">
-          <p>
-            Don't have an account?{' '}
-            <Link to="/register">
-              Create one
-            </Link>
-          </p>
+        <div style={{ textAlign: 'right', marginTop: '20px', fontSize: '12px', color: '#999' }}>
+          <p>Default: root / root</p>
         </div>
       </div>
     </div>
