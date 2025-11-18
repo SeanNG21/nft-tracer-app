@@ -28,7 +28,6 @@ const TraceViewer = ({ filename }) => {
     keyword: ''
   });
 
-  // Load trace file on mount
   useEffect(() => {
     loadTraceFile();
   }, [filename]);
@@ -49,11 +48,9 @@ const TraceViewer = ({ filename }) => {
     }
   };
 
-  // Apply filters
   const applyFilters = async () => {
     setLoading(true);
     try {
-      // Build query string from filters
       const queryParams = new URLSearchParams();
       Object.entries(filters).forEach(([key, value]) => {
         if (value) {
@@ -73,7 +70,6 @@ const TraceViewer = ({ filename }) => {
     }
   };
 
-  // Clear filters
   const clearFilters = () => {
     setFilters({
       src_ip: '',
@@ -92,13 +88,10 @@ const TraceViewer = ({ filename }) => {
     setFilteredPackets(packets);
   };
 
-  // Handle packet selection
   const handlePacketSelect = async (packet) => {
     try {
-      // Use original_index from packet to get correct data from backend
       const originalIndex = packet.original_index;
       if (originalIndex === undefined) {
-        // Fallback: if original_index not available, use packet data directly
         console.warn('original_index not found, using packet data directly');
         setSelectedPacket({
           ...packet,
@@ -144,7 +137,6 @@ const TraceViewer = ({ filename }) => {
 
   return (
     <div className="trace-viewer">
-      {/* Header */}
       <div className="trace-viewer-header">
         <h2>Packet Trace Analyzer</h2>
         <div className="trace-info">
@@ -156,7 +148,6 @@ const TraceViewer = ({ filename }) => {
         </div>
       </div>
 
-      {/* Statistics Summary */}
       <div className="trace-statistics">
         <div className="stat-card">
           <div className="stat-label">Packets Analyzed</div>
@@ -180,9 +171,7 @@ const TraceViewer = ({ filename }) => {
         </div>
       </div>
 
-      {/* Main Content */}
       <div className="trace-viewer-content">
-        {/* Packet List with Filters */}
         <div className={`packet-list-panel ${selectedPacket ? 'split' : 'full'}`}>
           <PacketList
             packets={filteredPackets}
@@ -196,7 +185,6 @@ const TraceViewer = ({ filename }) => {
           />
         </div>
 
-        {/* Packet Detail Panel */}
         {selectedPacket && (
           <div className="packet-detail-panel">
             <div className="packet-detail-header">

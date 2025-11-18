@@ -15,12 +15,10 @@ const PacketList = ({
   const [sortField, setSortField] = useState('first_seen');
   const [sortDirection, setSortDirection] = useState('asc');
 
-  // Handle filter input change
   const handleFilterChange = (field, value) => {
     onFilterChange({ ...filters, [field]: value });
   };
 
-  // Handle sort
   const handleSort = (field) => {
     if (sortField === field) {
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
@@ -30,7 +28,6 @@ const PacketList = ({
     }
   };
 
-  // Sort packets
   const sortedPackets = [...packets].sort((a, b) => {
     let aVal = a[sortField];
     let bVal = b[sortField];
@@ -47,12 +44,10 @@ const PacketList = ({
     }
   });
 
-  // Format timestamp
   const formatTimestamp = (ns) => {
     return (ns / 1000000).toFixed(3) + ' ms';
   };
 
-  // Format duration
   const formatDuration = (ns) => {
     if (ns < 1000) return ns + ' ns';
     if (ns < 1000000) return (ns / 1000).toFixed(2) + ' μs';
@@ -61,7 +56,6 @@ const PacketList = ({
 
   return (
     <div className="packet-list">
-      {/* Filter Section */}
       <div className="filter-section">
         <div className="filter-header">
           <h3>
@@ -238,7 +232,6 @@ const PacketList = ({
         )}
       </div>
 
-      {/* Packet Table */}
       <div className="packet-table-container">
         <div className="packet-table-header">
           <h3>Packets ({sortedPackets.length})</h3>

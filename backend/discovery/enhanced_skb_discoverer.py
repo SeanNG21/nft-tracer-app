@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-Enhanced BTF SKB Function Discoverer
-Automatically discovers and classifies ALL kernel functions with sk_buff parameter
-Organized by network stack layers: Device, GRO, Netfilter, IPv4, IPv6, TCP, UDP, Routing, Xmit, SoftIRQ
-Similar to pwru/cilium but with comprehensive layer classification
-"""
 
 import os
 import re
@@ -16,11 +10,10 @@ from collections import defaultdict
 
 @dataclass
 class SKBFunction:
-    """Represents a kernel function that handles sk_buff"""
     name: str
-    layer: str  # Device, GRO, Netfilter, IPv4, IPv6, TCP, UDP, Routing, Xmit, SoftIRQ, etc.
-    category: str  # More specific categorization
-    priority: int  # 0=critical, 1=important, 2=optional
+    layer: str
+    category: str
+    priority: int
     params: List[str] = None
     return_type: str = None
 
@@ -32,11 +25,8 @@ class SKBFunction:
             self.params = []
 
 class EnhancedSKBDiscoverer:
-    """Enhanced discoverer with comprehensive layer classification"""
 
-    # Layer-based classification (matching pwru/cilium approach)
     LAYER_PATTERNS = {
-        # Device Layer - packet enters/exits network device
         'Device': [
             'netif_receive_skb', '__netif_receive_skb', 'netif_rx',
             'dev_queue_xmit', '__dev_queue_xmit', 'dev_hard_start_xmit',
@@ -44,7 +34,6 @@ class EnhancedSKBDiscoverer:
             'eth_type_trans', 'arp_rcv',
         ],
 
-        # GRO (Generic Receive Offload) Layer
         'GRO': [
             'napi_gro_receive', 'napi_gro_complete', 'napi_gro_flush',
             'dev_gro_receive', 'gro_cells_receive',
@@ -52,7 +41,6 @@ class EnhancedSKBDiscoverer:
             'tcp6_gro_receive', 'udp6_gro_receive',
         ],
 
-        # Netfilter/NFT Layer - firewall and packet filtering
         'Netfilter': [
             'nf_hook_slow', 'nf_hook', 'NF_HOOK',
             'nft_do_chain', 'nft_immediate_eval', 'nft_payload_eval',
@@ -61,7 +49,6 @@ class EnhancedSKBDiscoverer:
             'xt_', 'ipt_', 'ip6t_', 'nft_', 'nf_',
         ],
 
-        # IPv4 Layer
         'IPv4': [
             'ip_rcv', 'ip_rcv_core', 'ip_rcv_finish',
             'ip_local_deliver', 'ip_local_deliver_finish',
@@ -72,7 +59,6 @@ class EnhancedSKBDiscoverer:
             'ip_route_input', 'ip_route_output',
         ],
 
-        # IPv6 Layer
         'IPv6': [
             'ip6_rcv', 'ip6_rcv_finish', 'ipv6_rcv',
             'ip6_input', 'ip6_input_finish',
@@ -82,7 +68,6 @@ class EnhancedSKBDiscoverer:
             'ip6_fragment',
         ],
 
-        # TCP Layer
         'TCP': [
             'tcp_v4_rcv', 'tcp_v4_do_rcv', 'tcp_rcv_established',
             'tcp_v6_rcv', 'tcp_v6_do_rcv',
@@ -91,14 +76,12 @@ class EnhancedSKBDiscoverer:
             'tcp_fastopen_', 'tcp_syn_', 'tcp_connect',
         ],
 
-        # UDP Layer
         'UDP': [
             'udp_rcv', '__udp4_lib_rcv', 'udp_queue_rcv_skb',
             'udp6_rcv', '__udp6_lib_rcv',
             'udp_send_skb', 'udp_sendmsg', 'udp_sendpage',
         ],
 
-        # Routing Layer
         'Routing': [
             'ip_route_input', 'ip_route_output', 'ip_route_input_slow',
             'fib_lookup', 'fib_validate_source', 'fib_table_lookup',
@@ -107,7 +90,6 @@ class EnhancedSKBDiscoverer:
             'ip6_pol_route', 'fib6_lookup',
         ],
 
-        # Xmit (Transmit) Layer
         'Xmit': [
             'dev_queue_xmit', '__dev_queue_xmit', 'dev_hard_start_xmit',
             'sch_direct_xmit', '__qdisc_run',
@@ -115,32 +97,27 @@ class EnhancedSKBDiscoverer:
             'validate_xmit_skb', '__dev_xmit_skb',
         ],
 
-        # SoftIRQ/NAPI Layer
         'SoftIRQ': [
             'net_rx_action', '__napi_poll', 'napi_poll',
             'process_backlog', 'net_tx_action',
             '__raise_softirq', 'do_softirq',
         ],
 
-        # Bridge Layer
         'Bridge': [
             'br_handle_frame', 'br_forward', 'br_pass_frame_up',
             'br_netif_receive_skb', 'br_dev_xmit',
         ],
 
-        # QoS/QDisc Layer
         'QDisc': [
             'qdisc_', 'sch_', 'pfifo_', 'tbf_', 'htb_',
             '__qdisc_run', 'qdisc_restart',
         ],
 
-        # Tunneling Layer
         'Tunnel': [
             'ip_tunnel_', 'gre_', 'vxlan_', 'geneve_',
             'ipip_', 'ip6_tunnel_', 'sit_',
         ],
 
-        # Socket Layer
         'Socket': [
             'sock_def_readable', 'sock_queue_rcv_skb',
             '__sock_queue_rcv_skb', 'sk_receive_skb',
@@ -148,14 +125,11 @@ class EnhancedSKBDiscoverer:
         ],
     }
 
-    # Critical functions (always trace these)
     CRITICAL_FUNCTIONS = [
-        # Core packet receive path
         '__netif_receive_skb_core',
         'netif_receive_skb',
         'netif_rx',
 
-        # IP layer critical
         'ip_rcv',
         'ip_local_deliver',
         'ip_forward',
@@ -163,17 +137,14 @@ class EnhancedSKBDiscoverer:
         'ip6_rcv',
         'ip6_input',
 
-        # Netfilter critical
         'nf_hook_slow',
         'nft_do_chain',
         'nft_immediate_eval',
 
-        # Transport critical
         'tcp_v4_rcv',
         'tcp_rcv_established',
         'udp_rcv',
 
-        # Xmit critical
         'dev_queue_xmit',
         '__dev_queue_xmit',
         'dev_hard_start_xmit',
@@ -184,26 +155,20 @@ class EnhancedSKBDiscoverer:
         self.layer_stats = defaultdict(int)
 
     def discover_all(self) -> List[SKBFunction]:
-        """Discover ALL SKB functions using multiple methods"""
         print("[*] Starting comprehensive SKB function discovery...")
         print("[*] This may take a minute...\n")
 
-        # Method 1: BTF-based discovery (most accurate)
         self._discover_via_btf()
 
-        # Method 2: kallsyms heuristic (broader coverage)
         self._discover_via_kallsyms()
 
-        # Classify all discovered functions
         self._classify_all_functions()
 
-        # Generate statistics
         self._print_statistics()
 
         return sorted(self.functions, key=lambda x: (x.priority, x.layer, x.name))
 
     def _discover_via_btf(self):
-        """Discover using BTF (most accurate)"""
         print("[*] Method 1: BTF-based discovery...")
 
         try:
@@ -228,8 +193,6 @@ class EnhancedSKBDiscoverer:
             print(f"    ! BTF error: {e}")
 
     def _parse_btf_output(self, btf_output: str):
-        """Parse BTF output for sk_buff functions"""
-        # Pattern: any function with 'struct sk_buff *' parameter
         pattern = r'(\w+)\s*\([^)]*struct\s+sk_buff\s*\*'
 
         for line in btf_output.split('\n'):
@@ -237,7 +200,6 @@ class EnhancedSKBDiscoverer:
             if match:
                 func_name = match.group(1)
 
-                # Skip internal/compiler symbols
                 if func_name.startswith('__pfx_') or func_name.startswith('__SCT__'):
                     continue
                 if func_name.startswith('__kstrtab') or func_name.startswith('__ksymtab'):
@@ -255,7 +217,6 @@ class EnhancedSKBDiscoverer:
                 self.functions.add(func)
 
     def _discover_via_kallsyms(self):
-        """Discover via kallsyms using heuristics"""
         print("[*] Method 2: kallsyms heuristic discovery...")
 
         initial_count = len(self.functions)
@@ -272,17 +233,14 @@ class EnhancedSKBDiscoverer:
                     symbol_type = parts[1]
                     func_name = parts[2]
 
-                    # Only T (text) symbols (actual functions)
                     if symbol_type not in ['T', 't']:
                         continue
 
-                    # Skip compiler/internal symbols
                     if func_name.startswith('__pfx_') or func_name.startswith('__SCT__'):
                         continue
                     if any(x in func_name for x in ['__kstrtab', '__ksymtab', '__crc_', '__BTF_ID']):
                         continue
 
-                    # Check if likely SKB function
                     if any(kw in func_name for kw in skb_keywords):
                         func = SKBFunction(
                             name=func_name,
@@ -300,11 +258,9 @@ class EnhancedSKBDiscoverer:
             print(f"    ! kallsyms error: {e}")
 
     def _classify_all_functions(self):
-        """Classify all functions by layer and category"""
         print("\n[*] Classifying functions by network stack layer...")
 
         for func in self.functions:
-            # Check each layer's patterns
             for layer, patterns in self.LAYER_PATTERNS.items():
                 matched = False
 
@@ -322,10 +278,8 @@ class EnhancedSKBDiscoverer:
                 if matched:
                     break
 
-            # Set category (more specific than layer)
             func.category = self._determine_category(func.name)
 
-            # Set priority
             if func.name in self.CRITICAL_FUNCTIONS:
                 func.priority = 0
             elif func.layer in ['Netfilter', 'IPv4', 'IPv6', 'TCP', 'UDP']:
@@ -335,11 +289,9 @@ class EnhancedSKBDiscoverer:
             else:
                 func.priority = 3
 
-            # Update stats
             self.layer_stats[func.layer] += 1
 
     def _determine_category(self, func_name: str) -> str:
-        """Determine specific category"""
         categories = {
             'nft': ['nft_', 'nf_tables_'],
             'netfilter': ['nf_', 'xt_', 'ipt_', 'ip6t_'],
@@ -364,7 +316,6 @@ class EnhancedSKBDiscoverer:
         return 'general'
 
     def _print_statistics(self):
-        """Print discovery statistics"""
         print("\n" + "="*70)
         print("DISCOVERY STATISTICS")
         print("="*70)
@@ -382,7 +333,6 @@ class EnhancedSKBDiscoverer:
             print(f"  {layer:15s}: {count:4d} ({pct:5.1f}%)")
 
     def export_json(self, filepath: str):
-        """Export to JSON with layer organization"""
         data = {
             'total': len(self.functions),
             'by_layer': {},
@@ -391,7 +341,6 @@ class EnhancedSKBDiscoverer:
             'functions': []
         }
 
-        # Organize by layer
         for func in self.functions:
             if func.layer not in data['by_layer']:
                 data['by_layer'][func.layer] = []
@@ -414,16 +363,12 @@ class EnhancedSKBDiscoverer:
         print(f"\n[✓] Exported to {filepath}")
 
     def get_by_layers(self, layers: List[str]) -> List[SKBFunction]:
-        """Get functions from specific layers"""
         return [f for f in self.functions if f.layer in layers]
 
     def get_by_priority(self, max_priority: int) -> List[SKBFunction]:
-        """Get functions up to priority level"""
         return [f for f in self.functions if f.priority <= max_priority]
 
     def generate_trace_config(self, filepath: str, max_functions: int = 100):
-        """Generate trace configuration for top functions"""
-        # Get top functions by priority
         top_funcs = sorted(self.functions, key=lambda x: (x.priority, x.layer, x.name))[:max_functions]
 
         config = {
@@ -439,7 +384,7 @@ class EnhancedSKBDiscoverer:
                 'layer': func.layer,
                 'category': func.category,
                 'priority': func.priority,
-                'enabled': func.priority <= 1  # Enable critical and important by default
+                'enabled': func.priority <= 1
             })
 
         with open(filepath, 'w') as f:
@@ -466,24 +411,19 @@ def main():
 
     args = parser.parse_args()
 
-    # Discover
     discoverer = EnhancedSKBDiscoverer()
     functions = discoverer.discover_all()
 
-    # Filter by layers if specified
     if args.layers:
         functions = discoverer.get_by_layers(args.layers)
         print(f"\n[*] Filtered to layers: {args.layers}")
 
-    # Filter by priority
     functions = discoverer.get_by_priority(args.priority)
     print(f"[*] Filtered to priority <= {args.priority}: {len(functions)} functions")
 
-    # Export
     discoverer.export_json(args.output)
     discoverer.generate_trace_config(args.config, args.max_trace)
 
-    # Print sample functions
     print("\n" + "="*70)
     print("SAMPLE FUNCTIONS BY LAYER")
     print("="*70)
@@ -493,7 +433,7 @@ def main():
         by_layer[func.layer].append(func)
 
     for layer in sorted(by_layer.keys()):
-        funcs = by_layer[layer][:5]  # Show 5 per layer
+        funcs = by_layer[layer][:5]
         print(f"\n{layer}:")
         for f in funcs:
             print(f"  [{f.priority}] {f.name} ({f.category})")
