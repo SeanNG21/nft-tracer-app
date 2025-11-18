@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nft-tracer-test
+  labels:
+    name: nft-tracer-test
+    purpose: testing

@@ -1,0 +1,15 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir requests
+
+# Copy traffic generators and scenarios
+COPY traffic-generators/ /app/traffic-generators/
+COPY scenarios/ /app/scenarios/
+
+# Make scripts executable
+RUN chmod +x /app/traffic-generators/*.py /app/scenarios/*.py
+
+CMD ["python3", "/app/scenarios/run-scenarios.py"]

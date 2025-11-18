@@ -1,0 +1,125 @@
+version: '3.8'
+
+services:
+  # Mock Web Server
+  mock-web-server:
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile.mock-services
+    container_name: nft-test-web-server
+    ports:
+      - "8080:8080"
+    environment:
+      - SERVICE_TYPE=web
+      - SERVICE_PORT=8080
+    networks:
+      - nft-test-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Mock API Service
+  mock-api-service:
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile.mock-services
+    container_name: nft-test-api-service
+    ports:
+      - "8081:8081"
+    environment:
+      - SERVICE_TYPE=api
+      - SERVICE_PORT=8081
+    networks:
+      - nft-test-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Mock Database (Redis for simplicity)
+  mock-database:
+    image: redis:7-alpine
+    container_name: nft-test-database
+    ports:
+      - "6379:6379"
+    networks:
+      - nft-test-network
+    restart: unless-stopped
+
+  # Mock PostgreSQL
+  mock-postgres:
+    image: postgres:15-alpine
+    container_name: nft-test-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=testuser
+      - POSTGRES_PASSWORD=testpass
+      - POSTGRES_DB=testdb
+    networks:
+      - nft-test-network
+    restart: unless-stopped
+
+  # Mock MySQL
+  mock-mysql:
+    image: mysql:8.0
+    container_name: nft-test-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=rootpass
+      - MYSQL_DATABASE=testdb
+      - MYSQL_USER=testuser
+      - MYSQL_PASSWORD=testpass
+    networks:
+      - nft-test-network
+    restart: unless-stopped
+
+  # Traffic Generator (runs scenarios)
+  traffic-generator:
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile.traffic-generator
+    container_name: nft-traffic-generator
+    depends_on:
+      - mock-web-server
+      - mock-api-service
+    networks:
+      - nft-test-network
+    environment:
+      - WEB_SERVER_URL=http://mock-web-server:8080
+      - API_SERVER_URL=http://mock-api-service:8081
+      - SCENARIO=mixed
+      - DURATION=3600
+    command: ["python3", "/app/scenarios/run-scenarios.py"]
+
+  # Nginx reverse proxy (to simulate real traffic)
+  nginx-proxy:
+    image: nginx:alpine
+    container_name: nft-test-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ../docker/nginx-test.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - mock-web-server
+      - mock-api-service
+    networks:
+      - nft-test-network
+    restart: unless-stopped
+
+networks:
+  nft-test-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  postgres-data:
+  mysql-data:

@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-web-server
+  namespace: nft-tracer-test
+  labels:
+    app: mock-web-server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: mock-web-server
+  template:
+    metadata:
+      labels:
+        app: mock-web-server
+    spec:
+      containers:
+      - name: mock-web-server
+        image: nft-tracer/mock-services:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: SERVICE_TYPE
+          value: "web"
+        - name: SERVICE_PORT
+          value: "8080"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-web-server
+  namespace: nft-tracer-test
+  labels:
+    app: mock-web-server
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: mock-web-server
