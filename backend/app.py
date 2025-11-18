@@ -1076,6 +1076,11 @@ class TraceSession:
 
                 if REALTIME_AVAILABLE and realtime:
                     try:
+                        # Map trace_type: 0=chain_exit, 1=rule_eval, 2=hook_exit
+                        trace_type = event.event_type - 1
+                        trace_type_map = {0: "chain_exit", 1: "rule_eval", 2: "hook_exit"}
+                        trace_type_str = trace_type_map.get(trace_type, f"unknown_{trace_type}")
+
                         realtime.process_session_event({
                             'hook': event.hook,
                             'func_name': 'nft_do_chain',
@@ -1083,7 +1088,9 @@ class TraceSession:
                             'protocol': event.protocol,
                             'src_ip': trace._format_ip(event.src_ip),
                             'dst_ip': trace._format_ip(event.dst_ip),
-                            'timestamp': time.time()
+                            'timestamp': time.time(),
+                            'trace_type': trace_type_str,  # ADD: trace_type for verdict filtering
+                            'skb_addr': hex(event.skb_addr) if event.skb_addr else None  # ADD: for deduplication
                         }, self.session_id)
                     except Exception as e:
                         pass
@@ -1225,7 +1232,6 @@ class SessionManager:
         self.sessions: Dict[str, TraceSession] = {}
         self.lock = threading.Lock()
         self.realtime = realtime_ext
-
     def create_session(self, session_id: str, mode: str = "nft",
                       pcap_filter: str = "", max_functions: int = 30) -> bool:
         with self.lock:
