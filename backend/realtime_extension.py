@@ -24,7 +24,6 @@ from bcc import BPF
 import ctypes as ct
 
 # Monitoring module
-from monitoring.timeseries_db import TimeSeriesDB
 from monitoring.alert_engine import AlertEngine
 
 # ============================================
@@ -1045,9 +1044,6 @@ class RealtimeTracer:
         self.stats = RealtimeStats()
         self.running = False
 
-        # Initialize time-series database for historical metrics
-        self.timeseries_db = TimeSeriesDB()
-
         # Initialize alert engine
         self.alert_engine = AlertEngine()
 
@@ -1329,12 +1325,6 @@ class RealtimeTracer:
             try:
                 summary = self.stats.get_summary()
                 self.socketio.emit('stats_update', summary)
-
-                # Store metrics in time-series database for historical analysis
-                try:
-                    self.timeseries_db.insert_metrics(summary)
-                except Exception as db_error:
-                    print(f"[!] TimeSeriesDB insert error: {db_error}")
 
                 # Check metrics against alert rules
                 try:
@@ -1993,43 +1983,6 @@ class RealtimeExtension:
         if self.tracer:
             self.tracer.reset_stats()
 
-    def get_historical_data(self, start_time=None, end_time=None, granularity='auto'):
-        """
-        Get historical metrics from time-series database
-
-        Args:
-            start_time: Start timestamp (unix seconds)
-            end_time: End timestamp (unix seconds)
-            granularity: 'raw', '1min', '5min', or 'auto'
-
-        Returns:
-            List of historical metrics
-        """
-        if not self.tracer:
-            return []
-        return self.tracer.timeseries_db.get_metrics(start_time, end_time, granularity)
-
-    def get_summary_stats(self, hours=1):
-        """
-        Get summary statistics for the last N hours
-
-        Args:
-            hours: Number of hours to look back (max 72 for 3 days)
-
-        Returns:
-            Dictionary with summary stats
-        """
-        if not self.tracer:
-            return {
-                'time_range_hours': hours,
-                'total_packets': 0,
-                'total_drops': 0,
-                'drop_rate': 0,
-                'avg_latency_us': 0,
-                'max_latency_us': 0
-            }
-        return self.tracer.timeseries_db.get_summary_stats(hours)
-    
     # ============= SESSION-SPECIFIC TRACKING =============
     
     def _setup_session_handlers(self):
@@ -2161,77 +2114,8 @@ def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
             return jsonify({'error': str(e)}), 500
 
     # ============================================
-    # MONITORING & HISTORICAL DATA API
+    # MONITORING & ALERTS API
     # ============================================
-
-    @app.route('/api/monitoring/history', methods=['GET'])
-    def get_monitoring_history():
-        """
-        Get historical metrics from time-series database
-
-        Query parameters:
-            start_time: Start timestamp (unix seconds)
-            end_time: End timestamp (unix seconds)
-            granularity: 'raw', '1min', '5min', or 'auto'
-            hours: Alternative to start_time/end_time - get last N hours (default: 1)
-        """
-        try:
-            if not realtime or not realtime.tracer:
-                return jsonify({'error': 'Tracer not initialized', 'data': []}), 200
-
-            # Get query parameters
-            start_time = request.args.get('start_time', type=int)
-            end_time = request.args.get('end_time', type=int)
-            granularity = request.args.get('granularity', 'auto')
-            hours = request.args.get('hours', type=int)
-
-            # If hours is specified, calculate start_time
-            if hours and not start_time:
-                import time as time_module
-                end_time = int(time_module.time())
-                start_time = end_time - (hours * 3600)
-
-            # Get metrics from time-series database
-            metrics = realtime.tracer.timeseries_db.get_metrics(start_time, end_time, granularity)
-
-            return jsonify({
-                'success': True,
-                'data': metrics,
-                'count': len(metrics),
-                'granularity': granularity,
-                'start_time': start_time,
-                'end_time': end_time
-            })
-        except Exception as e:
-            return jsonify({'error': str(e), 'data': []}), 500
-
-    @app.route('/api/monitoring/summary', methods=['GET'])
-    def get_monitoring_summary():
-        """
-        Get summary statistics for a time period
-
-        Query parameters:
-            hours: Number of hours to look back (default: 1, max: 72)
-        """
-        try:
-            if not realtime or not realtime.tracer:
-                return jsonify({
-                    'time_range_hours': 0,
-                    'total_packets': 0,
-                    'total_drops': 0,
-                    'drop_rate': 0,
-                    'avg_latency_us': 0,
-                    'max_latency_us': 0
-                })
-
-            hours = request.args.get('hours', 1, type=int)
-            hours = min(hours, 72)  # Cap at 3 days
-
-            summary = realtime.tracer.timeseries_db.get_summary_stats(hours)
-
-            return jsonify(summary)
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
 
     @app.route('/api/monitoring/alerts', methods=['GET'])
     def get_alerts():
@@ -2300,7 +2184,7 @@ def add_realtime_routes(app: Flask, realtime: RealtimeExtension):
             return jsonify({'error': str(e)}), 500
 
     print("[✓] Realtime API routes registered: /api/realtime/{enable,disable,stats,reset}")
-    print("[✓] Monitoring API routes registered: /api/monitoring/{history,summary,alerts}")
+    print("[✓] Monitoring API routes registered: /api/monitoring/alerts/*")
 
 # ============================================
 # MAIN

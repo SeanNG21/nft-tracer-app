@@ -1,9 +1,8 @@
 """
 Monitoring module for NFT Tracer
-Provides time-series storage, alerting, and historical data analysis
+Provides alerting and real-time monitoring capabilities
 """
 
-from .timeseries_db import TimeSeriesDB
 from .alert_engine import AlertEngine, AlertRule, Alert
 
-__all__ = ['TimeSeriesDB', 'AlertEngine', 'AlertRule', 'Alert']
+__all__ = ['AlertEngine', 'AlertRule', 'Alert']
