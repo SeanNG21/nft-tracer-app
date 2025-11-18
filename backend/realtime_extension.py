@@ -1732,10 +1732,10 @@ class SessionStatsTracker:
             layer_stats = hook_stats['layers'][layer_name]
             layer_stats['packets_in'] += 1
 
-            # DEBUG: Log verdict info for first few events
-            if self.total_events <= 10 and verdict != 255:
+            # DEBUG: Log verdict info for first few events AND all chain_exit events with DROP
+            if (self.total_events <= 10 and verdict != 255) or (trace_type == 'chain_exit' and verdict_name == 'DROP'):
                 print(f"[SessionStats {self.session_id}] Verdict event #{self.total_events}: "
-                      f"func={func_name}, verdict={verdict_name} ({verdict}), hook={hook_name}, trace_type={trace_type}")
+                      f"func={func_name}, verdict={verdict_name} ({verdict}), hook={hook_name}, trace_type={trace_type}, skb={skb_addr}")
 
             # VERDICT COUNTING LOGIC - Support both NFT events and function trace events:
             # 1. If trace_type exists (NFT events): ONLY count from "chain_exit" events
@@ -1776,6 +1776,8 @@ class SessionStatsTracker:
 
                 if should_count:
                     layer_stats['verdict_breakdown'][verdict_name] += 1
+                    # DEBUG: Log all verdict counts
+                    print(f"[SessionStats {self.session_id}] ✓ Counted verdict: {verdict_name} in layer={layer_name}, hook={hook_name}, trace_type={trace_type}, total_now={layer_stats['verdict_breakdown'][verdict_name]}")
 
             # Track function
             if func_name:
@@ -2083,7 +2085,9 @@ class SessionStatsTracker:
                     if 'Netfilter' in node_name and node_stats.verdict_breakdown:
                         for verdict, count in node_stats.verdict_breakdown.items():
                             total_verdicts[verdict] += count
+                            print(f"[SessionStats {self.session_id}] Node '{node_name}' has {verdict}: {count}")
                 stats['total_verdicts'] = dict(total_verdicts)
+                print(f"[SessionStats {self.session_id}] Total verdicts aggregated: {dict(total_verdicts)}")
 
                 # Top Latency Contributors (for latency hotspot panel)
                 latency_ranking = []
