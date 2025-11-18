@@ -370,6 +370,44 @@ class NodeStats:
             'truncated': self.truncated_count
         }
 
+    def to_summary(self) -> Dict:
+        """Convert to summary format for Enhanced Packet Pipeline Flow graph"""
+        # Top functions as object {func_name: percentage}
+        top_funcs_obj = {}
+        if self.function_calls:
+            total = sum(self.function_calls.values())
+            top_funcs = sorted(self.function_calls.items(), key=lambda x: x[1], reverse=True)[:3]
+            for func, count in top_funcs:
+                pct = round((count / total) * 100, 1) if total > 0 else 0
+                top_funcs_obj[func] = pct
+
+        # Latency in nanoseconds (convert from microseconds)
+        latency_ns = {}
+        if self.latencies_us:
+            import numpy as np
+            latencies = np.array(self.latencies_us)
+            latency_ns['p50'] = round(float(np.percentile(latencies, 50)) * 1000, 1)  # us → ns
+
+        # Verdict as percentages
+        verdict_pct = {}
+        if self.verdict_breakdown:
+            total_verdicts = sum(self.verdict_breakdown.values())
+            for verdict_name, count in self.verdict_breakdown.items():
+                pct = round((count / total_verdicts) * 100, 1) if total_verdicts > 0 else 0
+                verdict_pct[verdict_name] = pct
+
+        result = {
+            'count': self.count,
+            'top_functions': top_funcs_obj,
+            'latency_ns': latency_ns
+        }
+
+        # Only add verdict if available
+        if verdict_pct:
+            result['verdict'] = verdict_pct
+
+        return result
+
 @dataclass
 class EdgeStats:
     """Statistics for traffic flow between two nodes"""
@@ -1790,9 +1828,12 @@ class SessionStatsTracker:
             # ENHANCED: Add nodes data for full mode (for enhanced pipeline visualization)
             if self.mode == 'full':
                 nodes_data = {}
+                summary_data = {}
                 for node_name, node_stats in self.nodes.items():
                     nodes_data[node_name] = node_stats.to_dict()
+                    summary_data[node_name] = node_stats.to_summary()
                 stats['nodes'] = nodes_data
+                stats['summary'] = summary_data
 
             return stats
 
