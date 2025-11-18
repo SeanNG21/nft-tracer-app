@@ -10,3 +10,8 @@ python-socketio>=5.0.0
 # Note: Install system package first: apt-get install bpfcc-tools python3-bpfcc
 # Or install from source: https://github.com/iovisor/bcc
 bcc>=0.18.0
+
+# Authentication & Database
+flask-sqlalchemy>=3.0.0
+flask-jwt-extended>=4.4.0
+werkzeug>=2.0.0

@@ -1,5 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { Routes, Route } from 'react-router-dom';
 import axios from 'axios';
+import Login from './Login';
+import Register from './Register';
+import ProtectedRoute from './ProtectedRoute';
+import { useAuth } from './AuthContext';
 import RealtimeView from './RealtimeView';
 import SessionRealtimeStats from './SessionRealtimeStats';
 import TraceViewer from './TraceViewer';
@@ -8,7 +13,7 @@ import './App.css';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
 
-function App() {
+function Dashboard() {
   const [sessions, setSessions] = useState([]);
   const [files, setFiles] = useState([]);
   const [modes, setModes] = useState([]);
@@ -674,6 +679,56 @@ function App() {
 
       )}
 
+    </div>
+  );
+}
+
+function App() {
+  const { user, logout } = useAuth();
+
+  return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <DashboardWithLogout />
+          </ProtectedRoute>
+        }
+      />
+    </Routes>
+  );
+}
+
+function DashboardWithLogout() {
+  const { logout } = useAuth();
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <div style={{
+        position: 'absolute',
+        top: '20px',
+        right: '20px',
+        zIndex: 1000
+      }}>
+        <button
+          onClick={logout}
+          style={{
+            padding: '8px 16px',
+            backgroundColor: '#ff6b6b',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '14px'
+          }}
+        >
+          Logout
+        </button>
+      </div>
+      <Dashboard />
     </div>
   );
 }
