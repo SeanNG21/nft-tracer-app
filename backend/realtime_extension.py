@@ -311,7 +311,9 @@ class NodeStats:
                   verdict: str = None, error: bool = False):
         """Add an event to this node's statistics"""
         self.count += 1
-        self.unique_skbs.add(skb_addr)
+        # Only track unique SKBs if skb_addr is valid (not empty/None)
+        if skb_addr and skb_addr != '':
+            self.unique_skbs.add(skb_addr)
         if latency_us > 0:
             self.latencies_us.append(latency_us)
         if function:
