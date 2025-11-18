@@ -1720,6 +1720,178 @@
   }
 }
 
+/* ==================== NEW: UI Enhancement Styles ==================== */
+
+/* 1. Packet Rate Display */
+.node-packet-rate {
+  font-size: 0.7rem;
+  color: #4fc3f7;
+  margin-top: 3px;
+  padding: 2px 6px;
+  background: rgba(79, 195, 247, 0.15);
+  border-radius: 8px;
+  display: inline-block;
+  font-weight: 600;
+  border: 1px solid rgba(79, 195, 247, 0.3);
+}
+
+/* 2. Drop/Error Issue Badges */
+.node-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.issue-badge {
+  font-size: 0.65rem;
+  padding: 3px 8px;
+  border-radius: 10px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  animation: pulse-warning 2s ease-in-out infinite;
+}
+
+.drop-badge {
+  background: rgba(220, 53, 69, 0.2);
+  color: #dc3545;
+  border: 1px solid #dc3545;
+}
+
+.error-badge {
+  background: rgba(255, 193, 7, 0.2);
+  color: #e67e00;
+  border: 1px solid #ffc107;
+}
+
+@keyframes pulse-warning {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.02);
+  }
+}
+
+/* 3. Has Issues Modifier for Pipeline Nodes */
+.pipeline-node.has-issues {
+  border-width: 3px !important;
+  animation: pulse-danger 2s ease-in-out infinite;
+}
+
+@keyframes pulse-danger {
+  0%, 100% {
+    box-shadow: 0 4px 12px rgba(220, 53, 69, 0.6), 0 2px 4px rgba(220, 53, 69, 0.4);
+  }
+  50% {
+    box-shadow: 0 6px 16px rgba(220, 53, 69, 0.8), 0 3px 6px rgba(220, 53, 69, 0.6);
+  }
+}
+
+/* 4. Educational Tooltip Section */
+.tooltip-section.educational {
+  background: rgba(102, 126, 234, 0.08);
+  border-left: 3px solid #667eea;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border-radius: 6px;
+}
+
+.tooltip-description {
+  font-size: 0.85rem;
+  color: #333;
+  font-weight: 600;
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+
+.tooltip-details {
+  font-size: 0.75rem;
+  color: #555;
+  line-height: 1.5;
+  font-style: italic;
+  opacity: 0.9;
+}
+
+/* 5. Top Latency Contributors Panel */
+.panel-subtitle {
+  font-size: 0.9rem;
+  color: #666;
+  margin: -10px 0 15px 0;
+  font-style: italic;
+}
+
+.latency-ranking-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 15px;
+  margin-top: 15px;
+}
+
+.latency-rank-card {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 15px;
+  border-radius: 10px;
+  border: 2px solid;
+  transition: all 0.3s ease;
+  background: white;
+}
+
+.latency-rank-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+}
+
+.latency-rank-number {
+  font-size: 1.5rem;
+  font-weight: 700;
+  min-width: 50px;
+  text-align: center;
+}
+
+.latency-rank-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.latency-rank-node {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #333;
+}
+
+.latency-rank-stats {
+  display: flex;
+  gap: 15px;
+}
+
+.latency-rank-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.latency-rank-label {
+  font-size: 0.7rem;
+  color: #777;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.latency-rank-value {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #333;
+}
+
 /* Responsive adjustments for new components */
 @media (max-width: 768px) {
   .pipeline-stats-grid,
@@ -1740,6 +1912,24 @@
 
   .verdict-stat-count {
     font-size: 1.2rem;
+  }
+
+  .latency-ranking-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .node-packet-rate,
+  .issue-badge {
+    font-size: 0.6rem;
+    padding: 2px 5px;
+  }
+
+  .tooltip-description {
+    font-size: 0.8rem;
+  }
+
+  .tooltip-details {
+    font-size: 0.7rem;
   }
 }
 }

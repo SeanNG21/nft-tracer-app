@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import io from 'socket.io-client';
 import './Realtime.css';
+import { getNodeDescription } from './PipelineNodeDescriptions';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
 const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 'http://localhost:5000';
@@ -62,25 +63,43 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
   const count = nodeData?.count || 0;
   const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
 
+  // Get educational description
+  const nodeDesc = getNodeDescription(stageDef.name);
+
+  // Check for drops/errors for highlighting
+  const hasDrops = (nodeData?.drops || 0) > 0;
+  const hasErrors = (nodeData?.errors || 0) > 0;
+  const hasIssues = hasDrops || hasErrors;
+
   // Create gradient background based on stage color
-  const gradientBg = isActive
+  let gradientBg = isActive
     ? `linear-gradient(135deg, ${stageDef.color} 0%, ${stageDef.color}dd 100%)`
     : 'linear-gradient(135deg, #e0e0e0 0%, #c0c0c0 100%)';
+
+  // Red tint if has drops/errors
+  if (isActive && hasIssues) {
+    gradientBg = `linear-gradient(135deg, #dc3545 0%, ${stageDef.color} 50%, ${stageDef.color}dd 100%)`;
+  }
 
   // Verdict pie chart data for Netfilter nodes
   const verdictData = nodeData?.verdict || null;
   const isNetfilterNode = stageDef.name.includes('Netfilter');
 
+  // Packet rate
+  const packetRate = nodeData?.packet_rate || 0;
+
   return (
     <div className="pipeline-node-wrapper">
       <div
-        className={`pipeline-node ${isActive ? 'active' : 'inactive'}`}
+        className={`pipeline-node ${isActive ? 'active' : 'inactive'} ${hasIssues ? 'has-issues' : ''}`}
         style={{
           background: gradientBg,
           boxShadow: isActive
-            ? `0 4px 12px ${stageDef.color}60, 0 2px 4px ${stageDef.color}40`
+            ? hasIssues
+              ? `0 4px 12px rgba(220, 53, 69, 0.6), 0 2px 4px ${stageDef.color}40`
+              : `0 4px 12px ${stageDef.color}60, 0 2px 4px ${stageDef.color}40`
             : '0 2px 6px rgba(0,0,0,0.1)',
-          border: `2px solid ${isActive ? stageDef.color : '#bbb'}`,
+          border: `2px solid ${isActive ? (hasIssues ? '#dc3545' : stageDef.color) : '#bbb'}`,
         }}
       >
         {/* Icon */}
@@ -89,12 +108,27 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
         {/* Name */}
         <div className="node-name">{stageDef.name}</div>
 
-        {/* Count and In-Flight */}
+        {/* Count, In-Flight, and Packet Rate */}
         {isActive && (
           <div className="node-count">
             <div>{count.toLocaleString()}</div>
             {nodeData?.in_flight > 0 && (
               <div className="node-in-flight">⏳ {nodeData.in_flight}</div>
+            )}
+            {packetRate > 0 && (
+              <div className="node-packet-rate">{packetRate.toLocaleString()} pkt/s</div>
+            )}
+          </div>
+        )}
+
+        {/* Drop/Error Badges */}
+        {isActive && hasIssues && (
+          <div className="node-issues">
+            {hasDrops && (
+              <div className="issue-badge drop-badge">❌ {nodeData.drops} drops</div>
+            )}
+            {hasErrors && (
+              <div className="issue-badge error-badge">⚠️ {nodeData.errors} errors</div>
             )}
           </div>
         )}
@@ -136,13 +170,27 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
         {isActive && (
           <div className="node-tooltip">
             <div className="tooltip-header">{stageDef.name}</div>
-            <div className="tooltip-stat">Events: {count.toLocaleString()}</div>
-            {nodeData?.unique_packets && (
-              <div className="tooltip-stat">Unique: {nodeData.unique_packets}</div>
-            )}
-            {nodeData?.in_flight > 0 && (
-              <div className="tooltip-stat" style={{ color: '#ffeb3b' }}>In-flight: {nodeData.in_flight}</div>
-            )}
+
+            {/* Educational Section */}
+            <div className="tooltip-section educational">
+              <div className="tooltip-description">{nodeDesc.description}</div>
+              <div className="tooltip-details">{nodeDesc.details}</div>
+            </div>
+
+            {/* Statistics Section */}
+            <div className="tooltip-section">
+              <div className="tooltip-label">📊 Statistics:</div>
+              <div className="tooltip-stat">Events: {count.toLocaleString()}</div>
+              {nodeData?.unique_packets && (
+                <div className="tooltip-stat">Unique: {nodeData.unique_packets}</div>
+              )}
+              {nodeData?.in_flight > 0 && (
+                <div className="tooltip-stat" style={{ color: '#ffeb3b' }}>In-flight: {nodeData.in_flight}</div>
+              )}
+              {packetRate > 0 && (
+                <div className="tooltip-stat" style={{ color: '#4fc3f7' }}>Rate: {packetRate} pkt/s</div>
+              )}
+            </div>
             {nodeData?.latency && nodeData.latency.p50 > 0 && (
               <div className="tooltip-section">
                 <div className="tooltip-label">Latency (µs):</div>
@@ -457,6 +505,53 @@ function RealtimeView() {
                         <div className="verdict-stat-name" style={{ color }}>{verdict}</div>
                         <div className="verdict-stat-count">{count.toLocaleString()}</div>
                         <div className="verdict-stat-percentage">{percentage}%</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* NEW: Top Latency Contributors Panel */}
+          {stats && stats.top_latency && stats.top_latency.length > 0 && (
+            <div className="realtime-panel full-width">
+              <h3>🔥 Top Latency Contributors</h3>
+              <p className="panel-subtitle">Nodes with highest average processing time - potential bottlenecks</p>
+              <div className="latency-ranking-grid">
+                {stats.top_latency.slice(0, 5).map((item, index) => {
+                  // Color gradient from red (highest) to yellow (lowest)
+                  const colors = [
+                    { bg: 'rgba(220, 53, 69, 0.15)', border: '#dc3545', icon: '🔴' },  // Red
+                    { bg: 'rgba(253, 126, 20, 0.15)', border: '#fd7e14', icon: '🟠' },  // Orange
+                    { bg: 'rgba(255, 193, 7, 0.15)', border: '#ffc107', icon: '🟡' },   // Yellow
+                    { bg: 'rgba(40, 167, 69, 0.15)', border: '#28a745', icon: '🟢' },   // Green
+                    { bg: 'rgba(23, 162, 184, 0.15)', border: '#17a2b8', icon: '🔵' }   // Blue
+                  ];
+                  const colorScheme = colors[index] || colors[4];
+
+                  return (
+                    <div key={item.node} className="latency-rank-card" style={{
+                      backgroundColor: colorScheme.bg,
+                      borderColor: colorScheme.border
+                    }}>
+                      <div className="latency-rank-number">
+                        {colorScheme.icon} #{index + 1}
+                      </div>
+                      <div className="latency-rank-content">
+                        <div className="latency-rank-node">{item.node}</div>
+                        <div className="latency-rank-stats">
+                          <div className="latency-rank-stat">
+                            <span className="latency-rank-label">Avg Latency:</span>
+                            <span className="latency-rank-value" style={{ color: colorScheme.border }}>
+                              {item.avg_latency_us.toFixed(1)} µs
+                            </span>
+                          </div>
+                          <div className="latency-rank-stat">
+                            <span className="latency-rank-label">Sample Count:</span>
+                            <span className="latency-rank-value">{item.count.toLocaleString()}</span>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   );

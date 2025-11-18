@@ -307,6 +307,10 @@ class NodeStats:
     last_ts: Optional[float] = None
     in_flight_packets: set = field(default_factory=set)  # packets currently on this node
 
+    # For packet rate calculation
+    previous_count: int = 0
+    previous_ts: Optional[float] = None
+
     def add_event(self, skb_addr: str, latency_us: float = 0, function: str = None,
                   verdict: str = None, error: bool = False):
         """Add an event to this node's statistics"""
@@ -356,10 +360,36 @@ class NodeStats:
             for func, count in top_funcs
         ]
 
-    def to_dict(self) -> Dict:
+    def calculate_packet_rate(self, current_ts: float) -> float:
+        """Calculate packets/sec based on count delta and time delta"""
+        if self.previous_ts is None:
+            # First calculation - initialize
+            self.previous_count = self.count
+            self.previous_ts = current_ts
+            return 0.0
+
+        time_delta = current_ts - self.previous_ts
+        if time_delta <= 0:
+            return 0.0
+
+        count_delta = self.count - self.previous_count
+        rate = count_delta / time_delta
+
+        # Update for next calculation
+        self.previous_count = self.count
+        self.previous_ts = current_ts
+
+        return round(rate, 1)
+
+    def to_dict(self, current_ts: Optional[float] = None) -> Dict:
         """Convert to dict for JSON serialization"""
         latency = self.get_latency_percentiles()
         verdict_dict = dict(self.verdict_breakdown) if self.verdict_breakdown else None
+
+        # Calculate packet rate if timestamp provided
+        packet_rate = 0.0
+        if current_ts is not None:
+            packet_rate = self.calculate_packet_rate(current_ts)
 
         return {
             'count': self.count,
@@ -370,7 +400,8 @@ class NodeStats:
             'errors': self.error_count,
             'drops': self.drop_count,
             'truncated': self.truncated_count,
-            'in_flight': len(self.in_flight_packets)
+            'in_flight': len(self.in_flight_packets),
+            'packet_rate': packet_rate  # packets/sec
         }
 
 @dataclass
@@ -830,6 +861,7 @@ class RealtimeStats:
         """Get current statistics summary - optimized for frontend graph"""
         with self._lock:
             uptime = time.time() - self.start_time
+            current_ts = time.time()
 
             hooks_data = {}
             for hook_name in HOOK_ORDER:
@@ -840,10 +872,10 @@ class RealtimeStats:
                 if hook_name not in HOOK_ORDER:
                     hooks_data[hook_name] = hook_stats.to_dict()
 
-            # ENHANCED: Serialize nodes and edges
+            # ENHANCED: Serialize nodes and edges with packet rate
             nodes_data = {}
             for node_name, node_stats in self.nodes.items():
-                nodes_data[node_name] = node_stats.to_dict()
+                nodes_data[node_name] = node_stats.to_dict(current_ts)
 
             edges_data = []
             for edge_stats in self.edges.values():
@@ -866,6 +898,28 @@ class RealtimeStats:
                     for verdict, count in node_stats.verdict_breakdown.items():
                         total_verdicts[verdict] += count
 
+            # ENHANCED: Top Latency Contributors (for latency hotspot panel)
+            latency_ranking = []
+            total_latency = 0
+            for node_name, node_stats in self.nodes.items():
+                if node_stats.latencies_us:
+                    import numpy as np
+                    avg_latency = float(np.mean(node_stats.latencies_us))
+                    latency_ranking.append({
+                        'node': node_name,
+                        'avg_latency_us': round(avg_latency, 1),
+                        'count': len(node_stats.latencies_us)
+                    })
+                    total_latency += avg_latency
+
+            # Sort by latency descending and calculate percentage
+            latency_ranking.sort(key=lambda x: x['avg_latency_us'], reverse=True)
+            for item in latency_ranking[:10]:  # Top 10
+                if total_latency > 0:
+                    item['percentage'] = round((item['avg_latency_us'] / total_latency) * 100, 1)
+                else:
+                    item['percentage'] = 0
+
             return {
                 'total_packets': self.total_packets,
                 'uptime_seconds': round(uptime, 2),
@@ -883,7 +937,9 @@ class RealtimeStats:
                 # ENHANCED: Pipeline completion statistics
                 'pipelines': pipelines_data,
                 # ENHANCED: Total verdict statistics
-                'total_verdicts': dict(total_verdicts)
+                'total_verdicts': dict(total_verdicts),
+                # ENHANCED: Top latency contributors for hotspot analysis
+                'top_latency': latency_ranking[:10]
             }
     
     def reset(self):
