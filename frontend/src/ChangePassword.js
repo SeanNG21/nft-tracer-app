@@ -10,7 +10,7 @@ const ChangePassword = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const { user, logout } = useAuth();
+  const { user, logout, refetchUser } = useAuth();
   const navigate = useNavigate();
 
   const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
@@ -55,8 +55,10 @@ const ChangePassword = () => {
         new_password: newPassword,
       });
 
-      // Redirect to dashboard immediately
-      // The dashboard will fetch fresh user data
+      // Update user data in context after password change
+      await refetchUser();
+
+      // Redirect to dashboard
       navigate('/');
     } catch (err) {
       setError(err.response?.data?.error || 'Password change failed');
