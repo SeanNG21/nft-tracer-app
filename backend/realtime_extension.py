@@ -1393,6 +1393,10 @@ class SessionStatsTracker:
             'Outbound': defaultdict(int)
         }
 
+        # Verdict deduplication: track which SKB+layer already had verdict counted
+        # Format: {(skb_addr, layer_name): verdict_name}
+        self.skb_verdict_tracked: Dict[tuple, str] = {}
+
         # Multifunction-specific stats
         self.stats_by_layer = defaultdict(int)
         self.stats_by_hook = defaultdict(int)
@@ -1472,16 +1476,53 @@ class SessionStatsTracker:
             layer_stats = hook_stats['layers'][layer_name]
             layer_stats['packets_in'] += 1
 
-            # Track verdict (ONLY for rule_eval, skip chain_exit/hook_exit to avoid duplicates)
-            # trace_type: 0=chain_exit, 1=rule_eval, 2=hook_exit
-            # For NFT events: only count rule_eval (trace_type=1)
-            # For non-NFT events: count all verdicts (trace_type=-1)
+            # Track verdict with smart deduplication
+            # Prioritize rule_eval (trace_type=1), but also count chain_exit (trace_type=0)
+            # to ensure we capture DROP/ACCEPT verdicts even if rule_eval is not logged
+            # Deduplicate by tracking unique (skb_addr, layer_name) pairs
             should_track_verdict = verdict_name != 'UNKNOWN' and (
-                (func_name == 'nft_do_chain' and trace_type == 1) or  # NFT: only rule_eval
+                (func_name == 'nft_do_chain' and trace_type in [0, 1]) or  # NFT: rule_eval or chain_exit
                 (func_name != 'nft_do_chain')  # Non-NFT: all verdicts
             )
-            if should_track_verdict:
+
+            # Deduplication for NFT events
+            if should_track_verdict and func_name == 'nft_do_chain':
+                skb_addr = event.get('skb_addr', '')
+                dedup_key = (skb_addr, layer_name)
+
+                # Check if already tracked for this SKB+layer
+                if dedup_key in self.skb_verdict_tracked:
+                    # Already tracked - check priority (rule_eval > chain_exit)
+                    if trace_type == 1:  # rule_eval
+                        # Update to rule_eval verdict (higher priority)
+                        old_verdict = self.skb_verdict_tracked[dedup_key]
+                        if old_verdict != verdict_name:
+                            # Replace chain_exit verdict with rule_eval verdict
+                            layer_stats['verdict_breakdown'][old_verdict] -= 1
+                            layer_stats['verdict_breakdown'][verdict_name] += 1
+                            self.skb_verdict_tracked[dedup_key] = verdict_name
+                            print(f"[SessionStats {self.session_id}] UPDATED verdict for SKB {skb_addr} at layer '{layer_name}': {old_verdict} → {verdict_name} (rule_eval priority)")
+                        else:
+                            print(f"[SessionStats {self.session_id}] SKIPPED duplicate verdict for SKB {skb_addr} at layer '{layer_name}': {verdict_name}")
+                    else:  # chain_exit
+                        # Already tracked - skip this chain_exit
+                        print(f"[SessionStats {self.session_id}] SKIPPED chain_exit verdict for SKB {skb_addr} at layer '{layer_name}': {verdict_name} (already tracked)")
+                        should_track_verdict = False
+                else:
+                    # First time seeing this SKB+layer - track it
+                    layer_stats['verdict_breakdown'][verdict_name] += 1
+                    self.skb_verdict_tracked[dedup_key] = verdict_name
+                    print(f"[SessionStats {self.session_id}] VERDICT TRACKED to layer '{layer_name}': verdict={verdict_name}, trace_type={trace_type}, skb={skb_addr}, current={dict(layer_stats['verdict_breakdown'])}")
+            elif should_track_verdict:
+                # Non-NFT events - track directly
                 layer_stats['verdict_breakdown'][verdict_name] += 1
+
+            # Cleanup verdict tracking to prevent memory bloat
+            if len(self.skb_verdict_tracked) > 10000:
+                # Remove oldest 5000 entries
+                keys_to_remove = list(self.skb_verdict_tracked.keys())[:5000]
+                for key in keys_to_remove:
+                    del self.skb_verdict_tracked[key]
 
             # Track function
             if func_name:
@@ -1569,9 +1610,13 @@ class SessionStatsTracker:
                 if should_track_verdict and func_name == 'nft_do_chain':
                     current_breakdown = dict(node.verdict_breakdown) if node.verdict_breakdown else {}
                     rule_handle = event.get('rule_handle', 0)
-                    print(f"[SessionStats {self.session_id}] TRACKED to node '{pipeline_layer}': verdict={verdict_name}, trace_type={trace_type} (rule_eval), rule_handle={rule_handle}, current_breakdown={current_breakdown}")
+                    trace_type_names = {0: 'chain_exit', 1: 'rule_eval', 2: 'hook_exit'}
+                    trace_type_name = trace_type_names.get(trace_type, 'unknown')
+                    print(f"[SessionStats {self.session_id}] TRACKED to node '{pipeline_layer}': verdict={verdict_name}, trace_type={trace_type} ({trace_type_name}), rule_handle={rule_handle}, current_breakdown={current_breakdown}")
                 elif func_name == 'nft_do_chain' and not should_track_verdict:
-                    print(f"[SessionStats {self.session_id}] SKIPPED tracking to node '{pipeline_layer}': verdict={verdict_name}, trace_type={trace_type} (not rule_eval)")
+                    trace_type_names = {0: 'chain_exit', 1: 'rule_eval', 2: 'hook_exit'}
+                    trace_type_name = trace_type_names.get(trace_type, 'unknown')
+                    print(f"[SessionStats {self.session_id}] SKIPPED tracking to node '{pipeline_layer}': verdict={verdict_name}, trace_type={trace_type} ({trace_type_name})")
 
             # Update total packets (count unique packets, not events)
             self.total_packets = max(self.total_packets, sum(h['packets_total'] for h in self.hooks.values()) // max(len(self.hooks), 1))
