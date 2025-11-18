@@ -14,47 +14,26 @@ from flask_jwt_extended import (
 from models import User, db
 
 
-def register_user(username: str, email: str, password: str) -> tuple:
-    """
-    Register a new user
-
-    Args:
-        username: Username
-        email: Email address
-        password: Plain text password
-
-    Returns:
-        tuple: (user, error_message) where error_message is None if successful
-    """
-    # Validate input
-    if not username or not email or not password:
-        return None, "Username, email and password are required"
-
-    if len(username) < 3:
-        return None, "Username must be at least 3 characters"
-
-    if len(password) < 6:
-        return None, "Password must be at least 6 characters"
-
-    # Check if user already exists
-    if User.query.filter_by(username=username).first():
-        return None, "Username already exists"
-
-    if User.query.filter_by(email=email).first():
-        return None, "Email already exists"
-
-    # Create new user
-    try:
-        user = User(username=username, email=email)
-        user.set_password(password)
-
-        db.session.add(user)
-        db.session.commit()
-
-        return user, None
-    except Exception as e:
-        db.session.rollback()
-        return None, f"Database error: {str(e)}"
+def init_default_user():
+    """Initialize default root user if not exists"""
+    root = User.query.filter_by(username='root').first()
+    if not root:
+        try:
+            root = User(
+                username='root',
+                email='root@localhost',
+                first_login=True
+            )
+            root.set_password('root')
+            db.session.add(root)
+            db.session.commit()
+            print("[✓] Default root user created (username: root, password: root)")
+            return root, True
+        except Exception as e:
+            db.session.rollback()
+            print(f"[!] Error creating root user: {e}")
+            return None, False
+    return root, False
 
 
 def authenticate_user(username: str, password: str) -> tuple:
@@ -157,3 +136,39 @@ def optional_token(fn):
         return fn(*args, user=user, **kwargs)
 
     return decorated_function
+
+
+def change_password(user_id: int, old_password: str, new_password: str) -> tuple:
+    """
+    Change user password
+
+    Args:
+        user_id: User ID
+        old_password: Current password
+        new_password: New password
+
+    Returns:
+        tuple: (success, error_message)
+    """
+    user = User.query.get(user_id)
+
+    if not user:
+        return False, "User not found"
+
+    if not user.check_password(old_password):
+        return False, "Incorrect old password"
+
+    if len(new_password) < 6:
+        return False, "New password must be at least 6 characters"
+
+    if old_password == new_password:
+        return False, "New password must be different from old password"
+
+    try:
+        user.set_password(new_password)
+        user.first_login = False
+        db.session.commit()
+        return True, None
+    except Exception as e:
+        db.session.rollback()
+        return False, f"Database error: {str(e)}"

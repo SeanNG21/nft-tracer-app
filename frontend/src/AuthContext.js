@@ -85,15 +85,16 @@ export const AuthProvider = ({ children }) => {
         password,
       });
 
-      const { access_token, refresh_token, user: userData } = response.data;
+      const { access_token, refresh_token, user: userData, first_login } = response.data;
 
       localStorage.setItem('accessToken', access_token);
       localStorage.setItem('refreshToken', refresh_token);
+      localStorage.setItem('firstLogin', first_login ? 'true' : 'false');
       setAccessToken(access_token);
       setUser(userData);
       axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
 
-      return userData;
+      return { ...userData, first_login };
     } catch (err) {
       const message = err.response?.data?.error || 'Login failed';
       setError(message);

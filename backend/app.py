@@ -20,7 +20,7 @@ import psutil
 from discovery.btf_skb_discoverer import BTFSKBDiscoverer
 from integrations.nftables_manager import NFTablesManager
 from models import db, User
-from auth import register_user, authenticate_user, create_tokens, token_required
+from auth import init_default_user, authenticate_user, create_tokens, token_required, change_password
 
 try:
     from bcc import BPF
@@ -1301,33 +1301,10 @@ session_manager = SessionManager(realtime_ext=realtime if REALTIME_AVAILABLE els
 # Create database tables
 with app.app_context():
     db.create_all()
+    init_default_user()
     print("[✓] Database initialized")
 
 # ==================== AUTHENTICATION ROUTES ====================
-
-@app.route('/api/auth/register', methods=['POST'])
-def register():
-    """Register a new user"""
-    try:
-        data = request.json or {}
-        username = data.get('username', '').strip()
-        email = data.get('email', '').strip()
-        password = data.get('password', '')
-
-        user, error = register_user(username, email, password)
-        if error:
-            return jsonify({'error': error}), 400
-
-        tokens = create_tokens(user.id)
-        return jsonify({
-            'status': 'success',
-            'message': 'User registered successfully',
-            'user': user.to_dict(),
-            **tokens
-        }), 201
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
@@ -1346,6 +1323,7 @@ def login():
             'status': 'success',
             'message': 'Login successful',
             'user': user.to_dict(),
+            'first_login': user.first_login,
             **tokens
         }), 200
     except Exception as e:
@@ -1391,6 +1369,33 @@ def logout(user=None):
         'status': 'success',
         'message': 'Logout successful. Please delete the token on client-side.'
     }), 200
+
+
+@app.route('/api/auth/change-password', methods=['POST'])
+@token_required
+def change_pwd(user=None):
+    """Change user password (required after first login)"""
+    try:
+        data = request.json or {}
+        old_password = data.get('old_password', '')
+        new_password = data.get('new_password', '')
+
+        if not old_password or not new_password:
+            return jsonify({'error': 'Old password and new password are required'}), 400
+
+        success, error = change_password(user.id, old_password, new_password)
+        if not success:
+            return jsonify({'error': error}), 400
+
+        # Refresh user data
+        user = User.query.get(user.id)
+        return jsonify({
+            'status': 'success',
+            'message': 'Password changed successfully',
+            'user': user.to_dict()
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # ==================== PROTECTED API ROUTES ====================

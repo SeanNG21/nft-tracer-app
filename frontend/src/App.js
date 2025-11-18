@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import Login from './Login';
-import Register from './Register';
+import ChangePassword from './ChangePassword';
 import ProtectedRoute from './ProtectedRoute';
 import { useAuth } from './AuthContext';
 import RealtimeView from './RealtimeView';
@@ -689,7 +689,7 @@ function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      <Route path="/register" element={<Register />} />
+      <Route path="/change-password" element={<ChangePassword />} />
       <Route
         path="/"
         element={
@@ -703,7 +703,15 @@ function App() {
 }
 
 function DashboardWithLogout() {
-  const { logout } = useAuth();
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+
+  // Redirect to change password if first login
+  useEffect(() => {
+    if (user?.first_login) {
+      navigate('/change-password');
+    }
+  }, [user, navigate]);
 
   return (
     <div style={{ position: 'relative' }}>
