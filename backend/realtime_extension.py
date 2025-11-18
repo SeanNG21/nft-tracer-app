@@ -1823,18 +1823,18 @@ class RealtimeExtension:
         """Setup WebSocket handlers for session tracking"""
         @self.socketio.on('join_session')
         def handle_join_session(data):
+            from flask_socketio import join_room, emit
             session_id = data.get('session_id')
             if session_id:
-                from flask_socketio import join_room
                 join_room(f"session_{session_id}")
                 print(f"[WebSocket] Client joined session room: session_{session_id}")
                 emit('joined_session', {'session_id': session_id})
-        
+
         @self.socketio.on('leave_session')
         def handle_leave_session(data):
+            from flask_socketio import leave_room
             session_id = data.get('session_id')
             if session_id:
-                from flask_socketio import leave_room
                 leave_room(f"session_{session_id}")
                 print(f"[WebSocket] Client left session room: session_{session_id}")
     
@@ -1869,16 +1869,21 @@ class RealtimeExtension:
     
     def process_session_event(self, event: Dict, session_id: str):
         """Process an event for a specific session"""
-        with self.session_lock:
-            if session_id in self.session_trackers:
-                self.session_trackers[session_id].process_event(event)
-            else:
-                # Debug: session not found
-                if not hasattr(self, '_session_not_found_logged'):
-                    self._session_not_found_logged = set()
-                if session_id not in self._session_not_found_logged:
-                    print(f"[Warning] Session {session_id} not found in trackers. Available: {list(self.session_trackers.keys())}")
-                    self._session_not_found_logged.add(session_id)
+        try:
+            with self.session_lock:
+                if session_id in self.session_trackers:
+                    self.session_trackers[session_id].process_event(event)
+                else:
+                    # Debug: session not found
+                    if not hasattr(self, '_session_not_found_logged'):
+                        self._session_not_found_logged = set()
+                    if session_id not in self._session_not_found_logged:
+                        print(f"[Warning] Session {session_id} not found in trackers. Available: {list(self.session_trackers.keys())}")
+                        self._session_not_found_logged.add(session_id)
+        except Exception as e:
+            print(f"[Error] Failed to process event for session {session_id}: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _emit_session_stats_loop(self):
         """Background thread to emit session stats every 0.5 seconds to reduce sample loss"""
