@@ -214,6 +214,7 @@ int trace_skb_func(struct pt_regs *ctx, struct sk_buff *skb)
     evt.cpu_id = bpf_get_smp_processor_id();
     evt.pid = (u32)(tid >> 32);
     evt.event_type = EVENT_TYPE_FUNCTION_CALL;
+    evt.verdict = 255;  // CRITICAL FIX: Set verdict=255 (UNKNOWN) for function calls to prevent false verdict counting
 
     // CRITICAL: Get function IP for name lookup in userspace
     evt.func_ip = PT_REGS_IP(ctx);
