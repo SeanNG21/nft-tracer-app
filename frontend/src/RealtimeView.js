@@ -67,9 +67,14 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
     ? `linear-gradient(135deg, ${stageDef.color} 0%, ${stageDef.color}dd 100%)`
     : 'linear-gradient(135deg, #e0e0e0 0%, #c0c0c0 100%)';
 
-  // Verdict pie chart data for Netfilter nodes
+  // Verdict data for Netfilter nodes (percentages from summary)
   const verdictData = nodeData?.verdict || null;
   const isNetfilterNode = stageDef.name.includes('Netfilter');
+
+  // Convert top_functions from object {func: pct} to array for display
+  const topFunctionsArray = nodeData?.top_functions
+    ? Object.entries(nodeData.top_functions).map(([name, pct]) => ({ name, pct }))
+    : [];
 
   return (
     <div className="pipeline-node-wrapper">
@@ -95,9 +100,9 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
         )}
 
         {/* Top Functions */}
-        {isActive && nodeData?.top_functions && nodeData.top_functions.length > 0 && (
+        {isActive && topFunctionsArray.length > 0 && (
           <div className="node-functions">
-            {nodeData.top_functions.slice(0, 2).map((func, idx) => (
+            {topFunctionsArray.slice(0, 2).map((func, idx) => (
               <div key={idx} className="func-line">
                 <span className="func-name">{func.name}</span>
                 <span className="func-pct">{func.pct}%</span>
@@ -106,18 +111,17 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
           </div>
         )}
 
-        {/* Latency */}
-        {isActive && nodeData?.latency && nodeData.latency.p50 > 0 && (
+        {/* Latency (from latency_ns.p50 in nanoseconds) */}
+        {isActive && nodeData?.latency_ns && nodeData.latency_ns.p50 > 0 && (
           <div className="node-latency">
-            ⏱️ p50: {nodeData.latency.p50.toFixed(1)}µs
+            ⏱️ p50: {(nodeData.latency_ns.p50 / 1000).toFixed(1)}µs
           </div>
         )}
 
-        {/* Verdict for Netfilter nodes */}
+        {/* Verdict for Netfilter nodes (already percentages) */}
         {isActive && isNetfilterNode && verdictData && (
           <div className="node-verdict">
-            {Object.entries(verdictData).map(([verdict, vCount]) => {
-              const pct = count > 0 ? ((vCount / count) * 100).toFixed(0) : 0;
+            {Object.entries(verdictData).map(([verdict, pct]) => {
               return pct > 0 ? (
                 <div key={verdict} className={`verdict-badge verdict-${verdict.toLowerCase()}`}>
                   {verdict}: {pct}%
@@ -132,21 +136,16 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
           <div className="node-tooltip">
             <div className="tooltip-header">{stageDef.name}</div>
             <div className="tooltip-stat">Events: {count.toLocaleString()}</div>
-            {nodeData?.unique_packets && (
-              <div className="tooltip-stat">Unique: {nodeData.unique_packets}</div>
-            )}
-            {nodeData?.latency && nodeData.latency.p50 > 0 && (
+            {nodeData?.latency_ns && nodeData.latency_ns.p50 > 0 && (
               <div className="tooltip-section">
-                <div className="tooltip-label">Latency (µs):</div>
-                <div className="tooltip-stat">p50: {nodeData.latency.p50.toFixed(1)}</div>
-                <div className="tooltip-stat">p90: {nodeData.latency.p90.toFixed(1)}</div>
-                <div className="tooltip-stat">p99: {nodeData.latency.p99.toFixed(1)}</div>
+                <div className="tooltip-label">Latency:</div>
+                <div className="tooltip-stat">p50: {(nodeData.latency_ns.p50 / 1000).toFixed(1)}µs</div>
               </div>
             )}
-            {nodeData?.top_functions && nodeData.top_functions.length > 0 && (
+            {topFunctionsArray.length > 0 && (
               <div className="tooltip-section">
                 <div className="tooltip-label">Top Functions:</div>
-                {nodeData.top_functions.map((func, idx) => (
+                {topFunctionsArray.map((func, idx) => (
                   <div key={idx} className="tooltip-stat">
                     {idx + 1}. {func.name} – {func.pct}%
                   </div>
@@ -156,15 +155,12 @@ function PipelineNode({ stageDef, nodeData, maxCount, isActive }) {
             {verdictData && (
               <div className="tooltip-section">
                 <div className="tooltip-label">Verdicts:</div>
-                {Object.entries(verdictData).map(([verdict, vCount]) => (
+                {Object.entries(verdictData).map(([verdict, pct]) => (
                   <div key={verdict} className="tooltip-stat">
-                    {verdict}: {vCount} ({((vCount / count) * 100).toFixed(1)}%)
+                    {verdict}: {pct}%
                   </div>
                 ))}
               </div>
-            )}
-            {nodeData?.drops > 0 && (
-              <div className="tooltip-stat error">Drops: {nodeData.drops}</div>
             )}
           </div>
         )}
@@ -385,7 +381,7 @@ function RealtimeView() {
           </div>
 
           {/* ENHANCED: Pipeline Flow Visualization with Detailed Metrics */}
-          {stats && stats.nodes && Object.keys(stats.nodes).length > 0 && (
+          {stats && stats.summary && Object.keys(stats.summary).length > 0 && (
             <div className="realtime-panel full-width">
               <h3>🔄 Enhanced Packet Pipeline Flow</h3>
 
@@ -395,7 +391,7 @@ function RealtimeView() {
                   const inboundNodes = PIPELINE_DEFINITIONS.Inbound.mainFlow.concat(
                     ...Object.values(PIPELINE_DEFINITIONS.Inbound.branches)
                   );
-                  const inboundCounts = inboundNodes.map(s => stats.nodes[s.name]?.count || 0);
+                  const inboundCounts = inboundNodes.map(s => stats.summary[s.name]?.count || 0);
                   const hasInbound = inboundCounts.some(c => c > 0);
 
                   if (!hasInbound) return null;
@@ -416,7 +412,7 @@ function RealtimeView() {
                       <div className="pipeline-main-flow">
                         <div className="pipeline-stages">
                           {PIPELINE_DEFINITIONS.Inbound.mainFlow.map((stageDef, index, arr) => {
-                            const nodeData = stats.nodes[stageDef.name];
+                            const nodeData = stats.summary[stageDef.name];
                             const isActive = nodeData && nodeData.count > 0;
 
                             return (
@@ -448,7 +444,7 @@ function RealtimeView() {
                           </div>
                           <div className="pipeline-stages">
                             {PIPELINE_DEFINITIONS.Inbound.branches['Local Delivery'].map((stageDef, index, arr) => {
-                              const nodeData = stats.nodes[stageDef.name];
+                              const nodeData = stats.summary[stageDef.name];
                               const isActive = nodeData && nodeData.count > 0;
 
                               return (
@@ -478,7 +474,7 @@ function RealtimeView() {
                           </div>
                           <div className="pipeline-stages">
                             {PIPELINE_DEFINITIONS.Inbound.branches['Forward'].map((stageDef, index, arr) => {
-                              const nodeData = stats.nodes[stageDef.name];
+                              const nodeData = stats.summary[stageDef.name];
                               const isActive = nodeData && nodeData.count > 0;
 
                               return (
@@ -506,7 +502,7 @@ function RealtimeView() {
 
                 {/* Outbound Pipeline */}
                 {(() => {
-                  const outboundCounts = PIPELINE_DEFINITIONS.Outbound.map(s => stats.nodes[s.name]?.count || 0);
+                  const outboundCounts = PIPELINE_DEFINITIONS.Outbound.map(s => stats.summary[s.name]?.count || 0);
                   const hasOutbound = outboundCounts.some(c => c > 0);
 
                   if (!hasOutbound) return null;
@@ -525,7 +521,7 @@ function RealtimeView() {
 
                       <div className="pipeline-stages">
                         {PIPELINE_DEFINITIONS.Outbound.map((stageDef, index, arr) => {
-                          const nodeData = stats.nodes[stageDef.name];
+                          const nodeData = stats.summary[stageDef.name];
                           const isActive = nodeData && nodeData.count > 0;
 
                           return (
@@ -548,168 +544,6 @@ function RealtimeView() {
                     </div>
                   );
                 })()}
-              </div>
-            </div>
-          )}
-
-          {/* LINEAR FLOW GRAPH: Hook Pipeline (OLD - kept for compatibility) */}
-          {stats && stats.hooks && (
-            <div className="realtime-panel full-width">
-              <h3>🔄 Packet Flow Pipeline: Netfilter Hooks</h3>
-              
-              {/* Hook Pipeline - Horizontal Layout */}
-              <div className="hook-pipeline">
-                {HOOK_ORDER.map((hookName, index) => {
-                  const hookData = stats.hooks[hookName];
-                  const isExpanded = expandedHooks.has(hookName); // Check if hook is in Set
-                  
-                  if (!hookData) {
-                    return (
-                      <div key={hookName} className="hook-pipeline-item">
-                        <div className="hook-node inactive">
-                          <div className="hook-icon">{HOOK_ICONS[hookName]}</div>
-                          <div className="hook-name">{hookName}</div>
-                          <div className="hook-info">No data</div>
-                        </div>
-                        {index < HOOK_ORDER.length - 1 && (
-                          <div className="hook-arrow inactive">→</div>
-                        )}
-                      </div>
-                    );
-                  }
-
-                  const totalPackets = hookData.packets_total || 0;
-                  const layersData = hookData.layers || {};
-                  const avgDropRate = Object.values(layersData).length > 0
-                    ? Object.values(layersData).reduce((sum, l) => sum + (l.drop_rate || 0), 0) / Object.values(layersData).length
-                    : 0;
-                  const avgLatency = Object.values(layersData).length > 0
-                    ? Object.values(layersData).reduce((sum, l) => sum + (l.avg_latency_ms || 0), 0) / Object.values(layersData).length
-                    : 0;
-
-                  const colors = getDropRateColor(avgDropRate);
-
-                  return (
-                    <div key={hookName} className="hook-pipeline-item">
-                      <div 
-                        className={`hook-node active ${isExpanded ? 'expanded' : ''}`}
-                        style={{
-                          backgroundColor: colors.bg,
-                          borderColor: colors.border,
-                          boxShadow: `0 0 15px ${colors.border}40`
-                        }}
-                        onClick={() => toggleHookExpansion(hookName)}
-                      >
-                        <div className="hook-icon">{HOOK_ICONS[hookName]}</div>
-                        <div className="hook-name">{hookName}</div>
-                        <div className="hook-stats">
-                          <div className="hook-stat">
-                            <span className="label">📦</span>
-                            <span className="value">{totalPackets.toLocaleString()} pkts</span>
-                          </div>
-                          <div className="hook-stat">
-                            <span className="label">🚫</span>
-                            <span className="value" style={{ color: colors.text }}>
-                              {avgDropRate.toFixed(1)}%
-                            </span>
-                          </div>
-                          <div className="hook-stat">
-                            <span className="label">⏱️</span>
-                            <span className="value">{avgLatency.toFixed(2)} ms</span>
-                          </div>
-                        </div>
-                        <div className="hook-expand-hint">
-                          {isExpanded ? '▼ Click to collapse' : '▶ Click to expand layers'}
-                        </div>
-                      </div>
-
-                      {index < HOOK_ORDER.length - 1 && (
-                        <div className="hook-arrow active">→</div>
-                      )}
-
-                      {/* Expanded Layers - Show below hook */}
-                      {isExpanded && (
-                        <div className="layers-container">
-                          {Object.keys(layersData).length === 0 ? (
-                            <div className="no-layers-message">
-                              <p>ℹ️ No layer data available for this hook</p>
-                              <p className="hint">Layers will appear as packets flow through</p>
-                            </div>
-                          ) : (
-                            LAYER_ORDER.map(layerName => {
-                              const layerData = layersData[layerName];
-                              if (!layerData) return null;
-
-                              const layerColors = getDropRateColor(layerData.drop_rate || 0);
-                              const verdictText = Object.entries(layerData.verdict_breakdown || {})
-                                .map(([v, c]) => `${v}: ${((c / layerData.packets_in) * 100).toFixed(0)}%`)
-                                .join(', ');
-
-                              return (
-                                <div 
-                                  key={layerName} 
-                                  className="layer-node"
-                                  style={{
-                                    backgroundColor: layerColors.bg,
-                                    borderColor: layerColors.border
-                                  }}
-                                >
-                                  <div className="layer-header">
-                                    <span className="layer-icon">🧱</span>
-                                    <span className="layer-name">{layerName}</span>
-                                  </div>
-                                  <div className="layer-details">
-                                    <div className="layer-stat">
-                                      <span className="label">Packets:</span>
-                                      <span className="value">{layerData.packets_in}</span>
-                                    </div>
-                                    <div className="layer-stat">
-                                      <span className="label">Drop:</span>
-                                      <span className="value" style={{ color: layerColors.text }}>
-                                        {(layerData.drop_rate || 0).toFixed(1)}%
-                                      </span>
-                                    </div>
-                                    {layerData.avg_latency_ms > 0 && (
-                                      <div className="layer-stat">
-                                        <span className="label">Latency:</span>
-                                        <span className="value">{layerData.avg_latency_ms.toFixed(2)} ms</span>
-                                      </div>
-                                    )}
-                                    {verdictText && (
-                                      <div className="layer-stat">
-                                        <span className="label">Verdicts:</span>
-                                        <span className="value small">{verdictText}</span>
-                                      </div>
-                                    )}
-                                    {layerData.top_function && (
-                                      <div className="layer-stat">
-                                        <span className="label">Top Func:</span>
-                                        <span className="value small mono">
-                                          {layerData.top_function} ({layerData.top_function_calls})
-                                        </span>
-                                      </div>
-                                    )}
-                                    {Object.keys(layerData.error_breakdown || {}).length > 0 && (
-                                      <div className="layer-stat">
-                                        <span className="label">Errors:</span>
-                                        <span className="value small">
-                                          {Object.entries(layerData.error_breakdown)
-                                            .filter(([_, count]) => count > 0)
-                                            .map(([error, count]) => `${error} (${count})`)
-                                            .join(', ') || 'None'}
-                                        </span>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
               </div>
             </div>
           )}
